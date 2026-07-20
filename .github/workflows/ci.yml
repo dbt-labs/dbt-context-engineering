@@ -43,7 +43,11 @@ jobs:
       - name: deps
         run: dbt deps --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb
       - name: build + test (duckdb)
-        run: dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb
+        # duckdb resolves the profile's relative `path:` against the CWD (repo root), and it
+        # won't create missing parent dirs — so ensure target/ exists on a clean checkout.
+        run: |
+          mkdir -p target
+          dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb
 
   # Live battery — OPT-IN (manual `workflow_dispatch` only; never runs on PR/push). Runs the full
   # integration battery against real warehouses for all three adapters. Requires a repo secret

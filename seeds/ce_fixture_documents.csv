@@ -1,0 +1,4 @@
+document_id,document_text
+doc_1,Data pipelines break often. Observability is the core need! Can we see which model failed?
+doc_2,The nightly load is slow. It needs to finish before the morning refresh.
+doc_3,A single sentence document with no terminator

@@ -1,0 +1,13 @@
+target/
+dbt_packages/
+package-lock.yml
+logs/
+.user.yml
+*.pyc
+__pycache__/
+.env
+docs/
+tasks/
+.claude/
+CLAUDE.md
+.DS_Store

@@ -1,0 +1,31 @@
+name: 'ce_bigquery_tests'
+version: '1.0.0'
+config-version: 2
+
+# Live BigQuery integration test. Uses the user's ~/.dbt profile 'bigquery'.
+# RUNS REAL AI CALLS (small cost) once the AI models execute.
+profile: 'bigquery'
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+test-paths: ["tests"]
+target-path: "target"
+clean-targets: ["target", "dbt_packages"]
+
+vars:
+  # BigQuery AI.* endpoints (adjust per project availability).
+  ce_model_generate: 'gemini-2.5-flash'
+  ce_embedding_model: 'text-embedding-005'
+  ce_chunk_target_tokens: 512
+  ce_chunk_overlap_tokens: 0
+  # ce_bq_connection: left unset — try the service-account / default path first.
+  # Output-side cost control — the 65,825-token generate run was ~6,500 output tokens/row of
+  # Gemini 2.5 Flash thinking. Disable thinking and cap the response for these structured tasks.
+  ce_bq_thinking_budget: 0
+  ce_max_output_tokens: 1024
+
+models:
+  dbt_context_engineering:
+    +enabled: false
+    audit:
+      +enabled: true

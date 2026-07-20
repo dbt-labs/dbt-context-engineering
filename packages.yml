@@ -1,0 +1,4 @@
+# dbt-utils provides the adapter.dispatch convention this package follows.
+packages:
+  - package: dbt-labs/dbt_utils
+    version: [">=1.1.0", "<2.0.0"]

@@ -1,0 +1,76 @@
+name: 'dbt_context_engineering'
+version: '0.1.0'
+config-version: 2
+
+# A cross-platform dbt package for context engineering — modeling data that AI agents
+# read — across Snowflake (Cortex), Databricks, and BigQuery.
+# See CLAUDE.md and docs/DESIGN_SPEC.md.
+
+require-dbt-version: [">=1.6.0", "<2.0.0"]
+
+profile: 'dbt_context_engineering'
+
+macro-paths: ["macros", "prompts"]  # prompts are versioned Jinja macros (DECISIONS.md D4)
+model-paths: ["models"]
+seed-paths: ["seeds"]
+test-paths: ["tests"]
+
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+# ---------------------------------------------------------------------------
+# Configuration surface (spec §8). All divergent prerequisites live here,
+# visible and documented — never inferred. Override per project or per call.
+# ---------------------------------------------------------------------------
+vars:
+  # Default model per function (override per call at the wrapper).
+  # Model choice is the single largest cost lever — always explicit, always logged.
+  ce_model_generate: null      # e.g. snowflake: 'claude-3-5-sonnet'; set per adapter/project
+  ce_model_classify: null
+  ce_model_extract: null
+
+  # Embeddings — pinned. A corpus embedded by one model cannot be searched by another.
+  ce_embedding_model: null
+  ce_embedding_dim: null
+
+  # Chunking (ce_chunk, Phase 1). Token heuristic is ceil(char_length/4); no AI call.
+  # target = best-practice sweet spot (~512); overlap opt-in (0 = clean partition).
+  ce_chunk_target_tokens: 512
+  ce_chunk_overlap_tokens: 0
+
+  # Circuit breaker ceilings (ce_guard_batch, Phase 2). Guards the INPUT relation only.
+  ce_max_batch_rows: 10000
+  ce_max_est_tokens: 5000000
+
+  # OUTPUT-side cost control. The guard above only bounds INPUT tokens, so it cannot catch an
+  # output blowup. null => vendor default (nothing emitted).
+  #   ce_max_output_tokens — cross-engine response cap. Snowflake AI_COMPLETE `max_tokens`,
+  #     Databricks ai_query `max_tokens`, BigQuery `maxOutputTokens`. Applies to ce_generate on all
+  #     three; on Snowflake/Databricks classify & extract expose no cap (bounded by output_schema).
+  #   ce_bq_thinking_budget — BigQuery/Gemini ONLY. Gemini 2.5 runs DYNAMIC THINKING ON BY DEFAULT
+  #     and bills thinking as OUTPUT tokens; set 0 for structured tasks to stop paying for it.
+  ce_max_output_tokens: null      # e.g. 1024
+  ce_bq_thinking_budget: null     # 0 disables Gemini thinking; null => model default
+
+  # Cost logging (ce_log_ai_run, Phase 3). Price per 1k tokens for est_cost; null => est_cost
+  # left null and corrected by ce_cost_reconciliation against real usage.
+  ce_cost_per_1k_tokens: null
+
+  # BigQuery ONLY — required. A MODEL over a Vertex AI connection must exist before calls
+  # run. This is a setup step, never auto-created inside a model build.
+  ce_bq_connection: null       # e.g. 'us.my_vertex_connection'
+  ce_bq_model: null            # e.g. 'my_dataset.my_remote_model'
+
+  # Where the append-only AI run log is written (Phase 3).
+  ce_ai_run_log_relation: null
+
+models:
+  dbt_context_engineering:
+    audit:
+      +materialized: table
+
+seeds:
+  dbt_context_engineering:
+    +quote_columns: false

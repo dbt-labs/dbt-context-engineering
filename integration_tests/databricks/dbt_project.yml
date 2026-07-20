@@ -1,0 +1,28 @@
+name: 'ce_databricks_tests'
+version: '1.0.0'
+config-version: 2
+
+# Live Databricks integration test. Uses the user's ~/.dbt profile 'databricks'.
+# RUNS REAL AI CALLS (small cost) once the AI models execute. Requires serverless / DBR 18.2+.
+profile: 'databricks'
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+test-paths: ["tests"]
+target-path: "target"
+clean-targets: ["target", "dbt_packages"]
+
+vars:
+  # Databricks Foundation Model endpoints (adjust per workspace availability).
+  ce_model_generate: 'databricks-claude-haiku-4-5'
+  ce_embedding_model: 'databricks-gte-large-en'
+  ce_chunk_target_tokens: 512
+  ce_chunk_overlap_tokens: 0
+  # Output cap on ce_generate (ai_query max_tokens). No thinking knob on Databricks.
+  ce_max_output_tokens: 1024
+
+models:
+  dbt_context_engineering:
+    +enabled: false
+    audit:
+      +enabled: true

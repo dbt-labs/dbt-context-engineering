@@ -1,0 +1,55 @@
+version: 2
+
+models:
+  - name: ce_chunk_utterances
+    description: "ce_chunk output over the synthetic transcript seed (target_tokens=40)."
+    columns:
+      - name: chunk_id
+        description: "{partition}::{seq} — deterministic, stable."
+        tests: [unique, not_null]
+      - name: source_rows
+        description: "Array of utterance_ids in the chunk (lineage)."
+        tests: [not_null]
+      - name: chunk_text
+        tests: [not_null]
+      - name: chunk_seq
+        tests: [not_null]
+
+  - name: ce_chunk_overlap
+    description: "ce_chunk output with overlap enabled (target=40, overlap=15)."
+    columns:
+      - name: chunk_id
+        tests: [unique, not_null]
+      - name: source_rows
+        tests: [not_null]
+
+  - name: ce_split_docs
+    description: "ce_split_sentences over the synthetic document seed (one row per sentence)."
+    columns:
+      - name: sentence_id
+        description: "{document_id}-{sentence_index} — stable unit id for ce_chunk lineage."
+        tests: [unique, not_null]
+      - name: sentence_index
+        tests: [not_null]
+      - name: sentence_text
+        tests: [not_null]
+
+  - name: ce_chunk_docs
+    description: "ce_chunk over ce_split_docs (unit=sentence, target=15) — the split->pack pipeline."
+    columns:
+      - name: chunk_id
+        tests: [unique, not_null]
+      - name: source_rows
+        tests: [not_null]
+
+  - name: ce_render_prompt_test
+    description: "ce_prompt + ce_render_prompt validation (prompt assembly)."
+    columns:
+      - name: rendered_prompt
+        tests: [not_null]
+
+  - name: ce_guard_pass
+    description: "ce_guard_batch pre-hook passes under default ceilings."
+    columns:
+      - name: guarded_rows
+        tests: [not_null]

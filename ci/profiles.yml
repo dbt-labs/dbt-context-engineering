@@ -1,0 +1,42 @@
+# Structure-only CI profiles. `dbt parse` resolves the graph and renders the wrapper dispatch
+# WITHOUT opening a warehouse connection, so placeholder values are fine here. (Note: `dbt compile`
+# DOES connect at startup on every cloud adapter, so the structure gate uses parse, not compile.)
+# Real credentials are NEVER stored in the repo — the live battery reads them from a GH secret.
+#
+# One profile per integration-test project (names must match each project's `profile:`).
+
+jaffle-mcp-demo:            # integration_tests/snowflake
+  target: snowflake
+  outputs:
+    snowflake:
+      type: snowflake
+      account: placeholder
+      user: placeholder
+      password: placeholder
+      role: placeholder
+      database: placeholder
+      warehouse: placeholder
+      schema: ce_ci
+      threads: 1
+
+bigquery:                   # integration_tests/bigquery
+  target: bigquery
+  outputs:
+    bigquery:
+      type: bigquery
+      method: service-account
+      project: placeholder
+      dataset: ce_ci
+      keyfile: /dev/null
+      threads: 1
+
+databricks:                 # integration_tests/databricks
+  target: databricks
+  outputs:
+    databricks:
+      type: databricks
+      host: placeholder
+      http_path: placeholder
+      token: placeholder
+      schema: ce_ci
+      threads: 1

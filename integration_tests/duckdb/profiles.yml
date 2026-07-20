@@ -1,0 +1,8 @@
+# Local duckdb profile — no credentials, no network. Executes chunking SQL for deterministic tests.
+ce_duckdb_tests:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: 'target/ce_tests.duckdb'
+      threads: 1

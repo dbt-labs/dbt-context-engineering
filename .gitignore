@@ -1,5 +1,6 @@
 target/
 dbt_packages/
+*.venv/
 package-lock.yml
 logs/
 .user.yml

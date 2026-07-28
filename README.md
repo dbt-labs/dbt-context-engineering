@@ -97,6 +97,42 @@ Deterministic tests run on **duckdb** (no cloud credentials): `integration_tests
 `ce_chunk` and the `ce_split_sentences → ce_chunk` pipeline are also confirmed live on all three
 cloud engines.
 
+### Frontmatter and citation on chunks
+
+Static, document-level fields (title, a resolvable link back to the source, source system, …)
+carry through as passthrough columns via `frontmatter_columns` on `ce_chunk` — constant per
+partition, picked with `max()`, never split. Default is columns-only, so the embedding/LLM never
+sees them; pass `frontmatter_in_text=True` to also prepend a `"col: value"` block to `chunk_text`
+on every chunk.
+
+`ce_split_sentences` drops every column except `sentence_id`/`document_id`/`sentence_index`/
+`sentence_text` by default, so a document-level field like `title` doesn't survive the split step
+on its own — pass the same field names to `ce_split_sentences`'s `passthrough_columns` so they
+ride along onto every sentence row, then hand those same names to `ce_chunk`'s
+`frontmatter_columns`:
+
+```sql
+-- documents -> sentences (title/citation_url carried onto every row) -> token-bounded chunks
+{{ dbt_context_engineering.ce_split_sentences(
+    relation            = ref('stg__documents'),
+    id_column           = 'document_id',
+    text_column         = 'document_text',
+    passthrough_columns = ['title', 'citation_url']
+) }}
+```
+
+```sql
+{{ dbt_context_engineering.ce_chunk(
+    relation            = ref('stg_docs_split'),        -- the ce_split_sentences output above
+    id_column           = 'sentence_id',
+    order_column        = 'sentence_index',
+    text_column         = 'sentence_text',
+    partition_column    = 'document_id',
+    frontmatter_columns = ['title', 'citation_url'],    -- already on every row; just keep them
+    frontmatter_in_text = false                         -- default: columns only, not embedded
+) }}
+```
+
 ## The dispatch pattern
 
 Every engine-specific macro uses `adapter.dispatch`. Users call one macro; the correct
@@ -167,19 +203,23 @@ explicitly. Databricks indexes are created via its Vector Search API, not SQL.
 ## Knowledge base (Phase 6)
 
 `ce_knowledge_base` unifies multiple pre-embedded sources (tickets, calls, notes, …) into one
-mart with a common shape — `source_type, source_id, account_key, text, embedding, ts` — so a
-single search answers "everything about account X" across systems, with per-source lineage
-carried into results. **Register a new source** by adding one dict to the list:
+mart with a common shape — `source_type, source_id, account_key, text, embedding, ts,
+citation_url` — so a single search answers "everything about account X" across systems, with
+per-source lineage and a resolvable citation link carried into results. **Register a new
+source** by adding one dict to the list; `citation_url` is optional per source (omit it for a
+source with no resolvable link and that source's rows get `NULL`):
 
 ```sql
 -- models/knowledge_base.sql
 {{ dbt_context_engineering.ce_knowledge_base([
     {'relation': ref('stg_tickets'), 'source_type': 'ticket',
      'source_id': 'ticket_id', 'account_key': 'account_id',
-     'text': 'body', 'embedding': 'embedding', 'timestamp': 'created_at'},
+     'text': 'body', 'embedding': 'embedding', 'timestamp': 'created_at',
+     'citation_url': 'ticket_url'},
     {'relation': ref('stg_calls'),   'source_type': 'call',
      'source_id': 'call_id',   'account_key': 'account_id',
-     'text': 'transcript', 'embedding': 'embedding', 'timestamp': 'call_time'}
+     'text': 'transcript', 'embedding': 'embedding', 'timestamp': 'call_time',
+     'citation_url': 'call_url'}
 ]) }}
 ```
 
@@ -189,7 +229,7 @@ Then account-scoped retrieval across all sources at once:
 {{ dbt_context_engineering.ce_vector_search(
     relation=ref('knowledge_base'), embedding_column='embedding',
     query_embedding=dbt_context_engineering.ce_embed('renewal risk'),
-    id_column='source_id', select_columns=['source_type'],
+    id_column='source_id', select_columns=['source_type', 'citation_url'],
     filter="account_key = 'acme'") }}
 ```
 

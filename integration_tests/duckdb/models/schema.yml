@@ -53,3 +53,33 @@ models:
     columns:
       - name: guarded_rows
         tests: [not_null]
+
+  - name: ce_chunk_frontmatter_cols
+    description: "ce_chunk with frontmatter_columns (default frontmatter_in_text=False) — title/citation_url pass through as columns only."
+    columns:
+      - name: chunk_id
+        tests: [unique, not_null]
+      - name: title
+        tests: [not_null]
+      - name: citation_url
+        tests: [not_null]
+
+  - name: ce_chunk_frontmatter_text
+    description: "ce_chunk with frontmatter_columns and frontmatter_in_text=True — same as above, plus the block is prepended to chunk_text."
+    columns:
+      - name: chunk_id
+        tests: [unique, not_null]
+      - name: title
+        tests: [not_null]
+      - name: citation_url
+        tests: [not_null]
+
+  - name: ce_chunk_frontmatter_overlap
+    description: "ce_chunk with frontmatter_columns AND overlap_tokens>0 together — proves frontmatter survives the overlap-duplication path."
+    columns:
+      - name: chunk_id
+        tests: [unique, not_null]
+      - name: title
+        tests: [not_null]
+      - name: citation_url
+        tests: [not_null]

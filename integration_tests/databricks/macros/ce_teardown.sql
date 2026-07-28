@@ -1,24 +1,22 @@
 {#-
   ce_teardown([dry_run=true]) — drop every table/seed this project actually builds into the
   CURRENT target's database/schema, using dbt's own build graph instead of a hand-maintained list
-  (a hardcoded list drifts silently as models are added/removed — this replaces an earlier
-  version that did exactly that).
+  (a hardcoded list drifts silently as models are added/removed).
 
   The target schema here is a shared personal dev schema, not exclusive to this project, so this
   must never touch anything outside what this project's own manifest knows about. For every
   model/seed node in the graph, only drop it if the node's own configured database/schema
   actually equal target.database/target.schema (i.e. dbt itself confirms this object belongs in
   the current target) — and even then, the drop is always issued AT target.database/target.schema
-  (via api.Relation.create, which quotes correctly per adapter — plain string concatenation
-  breaks on BigQuery project IDs containing hyphens), never at whatever a node's own metadata
-  claims, so nothing outside the active target is ever touched even by construction.
+  (via api.Relation.create, which quotes correctly per adapter), never at whatever a node's own
+  metadata claims, so nothing outside the active target is ever touched even by construction.
 
   Defaults to a dry run (logs what it would drop, drops nothing) — pass dry_run=false to
   actually execute the drops.
 
   Usage:
-    dbt run-operation ce_teardown --project-dir integration_tests/snowflake
-    dbt run-operation ce_teardown --project-dir integration_tests/snowflake --args "{'dry_run':false}"
+    dbt run-operation ce_teardown --project-dir integration_tests/databricks
+    dbt run-operation ce_teardown --project-dir integration_tests/databricks --args "{'dry_run':false}"
 -#}
 {% macro ce_teardown(dry_run=true) %}
     {% if not execute %}

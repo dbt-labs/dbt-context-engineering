@@ -1,0 +1,3 @@
+call_id,customer,participants,recording_url
+call_001,Acme Data Co,"Jordan Lee, Sam Rivera",https://gong.example.com/call_001
+call_002,Northwind Analytics,"Jordan Lee, Priya Shah",https://gong.example.com/call_002

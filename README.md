@@ -44,6 +44,7 @@ macros/
   functions/               # ce_generate/classify/extract/embed (adapter.dispatch) + prereq checks
   prompts/                 # ce_prompt / ce_schema (macro-library loader, D4) + ce_render_prompt
   chunking/                # ce_chunk (unit packing) + ce_split_sentences (layer-1 splitter) + ce_array_agg/ce_string_agg
+  metadata/                # ce_attach_metadata (non-dispatched: join source-level metadata onto chunks)
   cost/                    # ce_guard_batch (guard) / ce_estimate_tokens / ce_log_ai_run
   incremental/             # ce_version_guard
   retrieval/               # ce_vector_search
@@ -97,41 +98,61 @@ Deterministic tests run on **duckdb** (no cloud credentials): `integration_tests
 `ce_chunk` and the `ce_split_sentences → ce_chunk` pipeline are also confirmed live on all three
 cloud engines.
 
-### Frontmatter and citation on chunks
+### Metadata on chunks (`ce_attach_metadata`)
 
-Static, document-level fields (title, a resolvable link back to the source, source system, …)
-carry through as passthrough columns via `frontmatter_columns` on `ce_chunk` — constant per
-partition, picked with `max()`, never split. Default is columns-only, so the embedding/LLM never
-sees them; pass `frontmatter_in_text=True` to also prepend a `"col: value"` block to `chunk_text`
-on every chunk.
-
-`ce_split_sentences` drops every column except `sentence_id`/`document_id`/`sentence_index`/
-`sentence_text` by default, so a document-level field like `title` doesn't survive the split step
-on its own — pass the same field names to `ce_split_sentences`'s `passthrough_columns` so they
-ride along onto every sentence row, then hand those same names to `ce_chunk`'s
-`frontmatter_columns`:
+`ce_chunk` and `ce_split_sentences` know nothing about metadata, and stay that way on
+purpose. Carrying a source-level field (title, a resolvable citation link, call participants)
+onto every chunk row is a `max()` aggregation and a join, plain ANSI SQL with no per-engine
+divergence to hide, so it doesn't belong inside a dispatched macro. `ce_attach_metadata` is a
+separate, portable macro that composes with their unmodified output as a step after chunking.
+`metadata_columns` is semantically agnostic: pass frontmatter fields (customer, participants),
+provenance fields (citation_url, recording_url), or any other source-level columns.
 
 ```sql
--- documents -> sentences (title/citation_url carried onto every row) -> token-bounded chunks
+-- documents -> sentences -> token-bounded chunks (both steps unmodified)
 {{ dbt_context_engineering.ce_split_sentences(
-    relation            = ref('stg__documents'),
-    id_column           = 'document_id',
-    text_column         = 'document_text',
-    passthrough_columns = ['title', 'citation_url']
+    relation    = ref('stg__documents'),
+    id_column   = 'document_id',
+    text_column = 'document_text'
 ) }}
 ```
 
 ```sql
 {{ dbt_context_engineering.ce_chunk(
-    relation            = ref('stg_docs_split'),        -- the ce_split_sentences output above
-    id_column           = 'sentence_id',
-    order_column        = 'sentence_index',
-    text_column         = 'sentence_text',
-    partition_column    = 'document_id',
-    frontmatter_columns = ['title', 'citation_url'],    -- already on every row; just keep them
-    frontmatter_in_text = false                         -- default: columns only, not embedded
+    relation         = ref('stg_docs_split'),   -- the ce_split_sentences output above
+    id_column        = 'sentence_id',
+    order_column     = 'sentence_index',
+    text_column      = 'sentence_text',
+    partition_column = 'document_id'
 ) }}
 ```
+
+```sql
+-- attach title/citation_url from the ORIGINAL document-level table, joined on document_id
+{{ dbt_context_engineering.ce_attach_metadata(
+    chunks_relation      = ref('stg_docs_chunks'),   -- the ce_chunk output above
+    metadata_relation    = ref('stg__documents'),    -- the document-level table, pre-split
+    metadata_key_column  = 'document_id',
+    metadata_columns     = ['title', 'citation_url'],
+    in_text              = false                     -- default: columns only, not embedded
+) }}
+```
+
+Same macro, different source — call-level metadata works identically:
+
+```sql
+{{ dbt_context_engineering.ce_attach_metadata(
+    chunks_relation      = ref('stg_call_chunks'),
+    metadata_relation    = ref('stg__calls'),
+    metadata_key_column  = 'call_id',
+    metadata_columns     = ['customer', 'participants', 'recording_url']
+) }}
+```
+
+`metadata_columns` values are picked with `max()`, so they must actually be constant per key,
+source-level, not unit-level. Pass `in_text=True` to also prepend a `"col: value"` block to
+`chunk_text` on every chunk, so the embedding or LLM sees it; `token_estimate` is recomputed to
+match.
 
 ## The dispatch pattern
 

@@ -54,8 +54,8 @@ models:
       - name: guarded_rows
         tests: [not_null]
 
-  - name: ce_chunk_frontmatter_cols
-    description: "ce_chunk with frontmatter_columns (default frontmatter_in_text=False) — title/citation_url pass through as columns only."
+  - name: ce_chunk_metadata_cols
+    description: "ce_attach_metadata over ce_chunk_docs (default in_text=False) — title/citation_url pass through as columns only."
     columns:
       - name: chunk_id
         tests: [unique, not_null]
@@ -64,8 +64,8 @@ models:
       - name: citation_url
         tests: [not_null]
 
-  - name: ce_chunk_frontmatter_text
-    description: "ce_chunk with frontmatter_columns and frontmatter_in_text=True — same as above, plus the block is prepended to chunk_text."
+  - name: ce_chunk_metadata_text
+    description: "ce_attach_metadata over ce_chunk_docs with in_text=True — same as above, plus the block is prepended to chunk_text."
     columns:
       - name: chunk_id
         tests: [unique, not_null]
@@ -74,12 +74,14 @@ models:
       - name: citation_url
         tests: [not_null]
 
-  - name: ce_chunk_frontmatter_overlap
-    description: "ce_chunk with frontmatter_columns AND overlap_tokens>0 together — proves frontmatter survives the overlap-duplication path."
+  - name: ce_chunk_metadata_utterances
+    description: "ce_attach_metadata over ce_chunk_utterances (transcripts, not documents) — same macro and call shape as ce_chunk_metadata_cols, pointed at a structurally different source: customer/participants are frontmatter, recording_url is provenance."
     columns:
       - name: chunk_id
         tests: [unique, not_null]
-      - name: title
+      - name: customer
         tests: [not_null]
-      - name: citation_url
+      - name: participants
+        tests: [not_null]
+      - name: recording_url
         tests: [not_null]

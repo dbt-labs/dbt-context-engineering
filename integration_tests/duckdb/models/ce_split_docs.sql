@@ -3,6 +3,5 @@
 {{ dbt_context_engineering.ce_split_sentences(
     relation=ref('ce_fixture_documents'),
     id_column='document_id',
-    text_column='document_text',
-    passthrough_columns=['title', 'citation_url']
+    text_column='document_text'
 ) }}

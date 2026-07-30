@@ -2,8 +2,10 @@
 
 This directory holds the architecture decision records (ADRs) for
 `dbt_context_engineering`. An ADR captures a single architecturally significant decision:
-the context that forced it, the decision itself, and the consequences that follow. The format
-is [Michael Nygard's](https://adr.github.io/), kept deliberately short.
+the concept behind it, the context that forced it, the decision itself, the reasoning from first
+principles, and the consequences that follow. The format extends
+[Michael Nygard's](https://adr.github.io/) with Concept, Reasoning, and Glossary sections so a
+record explains itself to a reader who does not already know the codebase.
 
 This directory is tracked, and ADRs are reviewed with the code that implements them, so the
 reasoning ships alongside the change and survives the people who made it.
@@ -14,7 +16,13 @@ reasoning ships alongside the change and survives the people who made it.
 - Statuses: `Proposed`, `Accepted`, `Superseded by ADR-XXXX`, `Deprecated`.
 - Never edit the decision of an accepted ADR. To change a decision, write a new ADR that
   supersedes it and update the old one's status.
-- Copy `template.md` to start a new record.
+- Copy `template.md` to start a new record. Each record carries Concept, Context, Decision,
+  Reasoning, Consequences, and Glossary.
+- Write for the reader who has the code open. Name the real macros, SQL constructs, columns, and
+  defaults so the record can be checked against what shipped. Lead the Decision with one bolded
+  thesis sentence and a code block where it clarifies, structure Reasoning as bold "Why ..."
+  questions answered from first principles, and keep Consequences a bullet list tied to concrete
+  mechanisms.
 
 ## Index
 

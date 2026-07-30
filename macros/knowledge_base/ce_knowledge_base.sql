@@ -12,6 +12,12 @@
   source must already carry an embedding column produced by the SAME embedding model — see
   ce_version_guard).
 
+  Note the deliberate contrast with ce_attach_metadata. There, at the transform layer, metadata is
+  flat: every field is just a column to carry, and citation_url has no special status. Here, at the
+  serving layer, citation_url is a first-class slot in the common shape. The difference is
+  intentional. A generic transform should not privilege one field; a serving contract earns a fixed
+  provenance slot because a resolvable citation is part of what it promises its consumers.
+
   `sources` is a list of dicts; register a new source by adding one entry. `citation_url` is
   optional — omit it for a source with no resolvable link and that source's rows get NULL:
     {{ ce_knowledge_base([

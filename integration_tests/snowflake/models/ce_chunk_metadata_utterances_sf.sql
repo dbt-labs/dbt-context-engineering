@@ -4,7 +4,7 @@
     are frontmatter (relational, call-level metadata); recording_url is provenance (a resolvable
     link back to the call). -#}
 {{ dbt_context_engineering.ce_attach_metadata(
-    chunks_relation=ref('ce_chunk_sf'),
+    chunks_relation=ref('ce_chunk_utterances_sf'),
     metadata_relation=ref('ce_fixture_calls'),
     metadata_key_column='call_id',
     metadata_columns=[

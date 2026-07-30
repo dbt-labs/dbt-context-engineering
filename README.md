@@ -102,7 +102,7 @@ cloud engines.
 
 `ce_chunk` and `ce_split_sentences` know nothing about metadata, and stay that way on
 purpose. Carrying a source-level field (title, a resolvable citation link, call participants)
-onto every chunk row is a `max()` aggregation and a join, plain ANSI SQL with no per-engine
+onto every chunk row is a `distinct` collapse and a join, plain ANSI SQL with no per-engine
 divergence to hide, so it doesn't belong inside a dispatched macro. `ce_attach_metadata` is a
 separate, portable macro that composes with their unmodified output as a step after chunking.
 `metadata_columns` is semantically agnostic: pass frontmatter fields (customer, participants),
@@ -138,7 +138,7 @@ provenance fields (citation_url, recording_url), or any other source-level colum
 ) }}
 ```
 
-Same macro, different source — call-level metadata works identically:
+Same macro, different source. Call-level metadata works identically:
 
 ```sql
 {{ dbt_context_engineering.ce_attach_metadata(
@@ -149,10 +149,11 @@ Same macro, different source — call-level metadata works identically:
 ) }}
 ```
 
-`metadata_columns` values are picked with `max()`, so they must actually be constant per key,
-source-level, not unit-level. Pass `in_text=True` to also prepend a `"col: value"` block to
-`chunk_text` on every chunk, so the embedding or LLM sees it; `token_estimate` is recomputed to
-match.
+Each `metadata_columns` value must be constant per key (source-level, not unit-level). The macro
+collapses `metadata_relation` with `distinct`, so a key carrying conflicting values fans out the
+join and fails the `chunk_id` uniqueness test rather than silently keeping one value. Pass
+`in_text=True` to also prepend a `"col: value"` block to `chunk_text` on every chunk, so the
+embedding or LLM sees it; `token_estimate` is recomputed to match.
 
 ## The dispatch pattern
 

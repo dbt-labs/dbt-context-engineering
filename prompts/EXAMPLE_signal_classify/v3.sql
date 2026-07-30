@@ -4,6 +4,11 @@
   literals. {% raw %} keeps the {{ input }} placeholder literal — the function wrappers
   substitute the input column for it. This EXAMPLE is illustrative only (DECISIONS.md D3):
   stg_gong__transcripts is never a real dependency.
+
+  Allowed labels are NOT hand-listed here — they live once in the schema `enum` below. On engines
+  whose structured output can't carry an enum (BigQuery), the wrappers auto-inject the allowed
+  values into the prompt via ce_augment_prompt, so the model is constrained everywhere from a single
+  source of truth (see docs/PARITY.md, structured-output divergence).
 -#}
 
 {% macro ce_prompt__EXAMPLE_signal_classify__v3() -%}

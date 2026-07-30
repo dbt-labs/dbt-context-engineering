@@ -71,8 +71,10 @@
 
 {% macro bigquery__ce_generate(input_column, prompt, output_schema, model) -%}
     {%- set _mp = dbt_context_engineering.ce_bq_model_params(var('ce_max_output_tokens', none), var('ce_bq_thinking_budget', none)) -%}
+    {#- BigQuery output_schema can't carry an enum, so inject any enum labels into the prompt
+        (ce_augment_prompt) — no-op when the schema has none. -#}
     AI.GENERATE(
-        prompt => {{ dbt_context_engineering.ce_render_prompt(prompt, input_column) }},
+        prompt => {{ dbt_context_engineering.ce_render_prompt(dbt_context_engineering.ce_augment_prompt(prompt, output_schema), input_column) }},
         {% if var('ce_bq_connection', none) %}connection_id => '{{ var("ce_bq_connection") }}',
         {% endif -%}
         endpoint => '{{ model or var("ce_model_generate", "gemini-2.5-flash") }}'

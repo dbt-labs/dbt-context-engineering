@@ -33,7 +33,6 @@ vars:
 
   # Embeddings — pinned. A corpus embedded by one model cannot be searched by another.
   ce_embedding_model: null
-  ce_embedding_dim: null
 
   # Chunking (ce_chunk, Phase 1). Token heuristic is ceil(char_length/4); no AI call.
   # target = best-practice sweet spot (~512); overlap opt-in (0 = clean partition).
@@ -55,7 +54,7 @@ vars:
   ce_bq_thinking_budget: null     # 0 disables Gemini thinking; null => model default
 
   # Cost logging (ce_log_ai_run, Phase 3). Price per 1k tokens for est_cost; null => est_cost
-  # left null and corrected by ce_cost_reconciliation against real usage.
+  # left null.
   ce_cost_per_1k_tokens: null
 
   # BigQuery ONLY — required. A MODEL over a Vertex AI connection must exist before calls

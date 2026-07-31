@@ -24,11 +24,13 @@ Built **one phase at a time behind approval gates** — see `CLAUDE.md` and `tas
 (scaffolding), Phase 1 (chunking — `ce_chunk`), Phase 2 (AI function wrappers + prompt library +
 cost guard), Phase 3 (run log + reconciliation), Phase 4 (incremental pattern +
 `ce_version_guard`), Phase 5 (retrieval — `ce_vector_search` + opt-in `ce_create_vector_index`),
-and Phase 6 (knowledge base — `ce_knowledge_base`) are complete. Testing posture is
-**structure-only** for cloud AI calls (assembled per-dialect SQL is validated, execution deferred
-until credentials land), plus **full deterministic execution on duckdb** of chunking, prompt
-resolution/rendering, the cost guard, and the AI run log. Cost reconciliation against engine
-usage tables is built but LIVE-VALIDATION DEFERRED. See `docs/DECISIONS.md`.
+and Phase 6 (knowledge base — `ce_knowledge_base`) are complete. Testing posture: the cloud AI
+calls (`ce_generate`, `ce_classify`, `ce_extract`, `ce_embed`, `ce_vector_search`) have **executed
+successfully on all three engines** (Snowflake, Databricks, BigQuery) against mock sample data,
+alongside **full deterministic execution on duckdb** of chunking, prompt resolution/rendering, the
+cost guard, and the AI run log. Not yet validated: execution against real production data at
+scale, and cost reconciliation against engine usage tables (built, LIVE-VALIDATION DEFERRED). See
+`docs/DECISIONS.md`.
 
 ## Repo map
 
@@ -175,7 +177,8 @@ from {{ ref('stg_gong__transcripts') }}
 
 `ce_prompt`/`ce_schema` resolve versioned prompt macros (under `prompts/`) to compile-time
 literals; `ce_guard_batch` is the pre-hook circuit breaker so no AI call runs unguarded.
-Prompt/guard/chunking logic is validated on duckdb; the AI calls themselves are cloud-deferred.
+Prompt/guard/chunking logic is validated on duckdb; the AI calls have executed on all three cloud
+engines against mock sample data.
 
 ## Governed incremental AI model (Phases 2–4 together)
 

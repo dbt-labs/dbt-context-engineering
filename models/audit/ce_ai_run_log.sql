@@ -3,8 +3,7 @@
 
   Incremental table whose own SELECT defines the schema but emits NO rows (where 1=0). Rows are
   appended by the ce_log_ai_run post-hook on each AI model run, so the log persists and grows
-  across dbt invocations (a full-refresh resets it). Reconciled against engine usage sources by
-  ce_cost_reconciliation.
+  across dbt invocations (a full-refresh resets it).
 -#}
 {{ config(materialized='incremental') }}
 

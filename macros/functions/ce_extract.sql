@@ -23,11 +23,15 @@
 
 {% macro snowflake__ce_extract(input_column, prompt, output_schema, model) -%}
     {#- AI_EXTRACT uses camelCase `responseFormat`; JSON-schema mode nests the schema under a
-        `schema` key ("if responseFormat contains the schema key, define all fields within it"). -#}
-    ai_extract(
+        `schema` key ("if responseFormat contains the schema key, define all fields within it").
+        Its result is an envelope {"error":…, "response": {<fields>}} (CONFIRMED live 2026-07-29);
+        unwrap `:response` so ce_extract returns the fields object directly — uniform with the
+        Databricks (JSON string) / BigQuery (STRUCT) shapes, so ce_field('col','name') reads it the
+        same way on every engine. -#}
+    (ai_extract(
         text => {{ dbt_context_engineering.ce_render_prompt(prompt, input_column) }},
         responseFormat => {'schema': parse_json($${{ output_schema }}$$)}
-    )
+    )):response
 {%- endmacro %}
 
 
@@ -56,8 +60,9 @@
     {#- AI.GENERATE_TABLE is a TABLE function (can't sit in a SELECT column). For a row-level
         scalar extract we use AI.GENERATE with output_schema, which returns a typed STRUCT per row. -#}
     {%- set _mp = dbt_context_engineering.ce_bq_model_params(var('ce_max_output_tokens', none), var('ce_bq_thinking_budget', none)) -%}
+    {#- Inject enum labels into the prompt — BigQuery output_schema can't carry them (see ce_augment_prompt). -#}
     AI.GENERATE(
-        prompt => {{ dbt_context_engineering.ce_render_prompt(prompt, input_column) }},
+        prompt => {{ dbt_context_engineering.ce_render_prompt(dbt_context_engineering.ce_augment_prompt(prompt, output_schema), input_column) }},
         {% if var('ce_bq_connection', none) %}connection_id => '{{ var("ce_bq_connection") }}',
         {% endif -%}
         endpoint => '{{ model or var("ce_model_extract", "gemini-2.5-flash") }}',

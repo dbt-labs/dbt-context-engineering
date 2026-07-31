@@ -5,6 +5,7 @@ logs/
 .user.yml
 *.pyc
 __pycache__/
+*.venv
 .env
 docs/
 tasks/

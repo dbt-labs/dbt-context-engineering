@@ -14,6 +14,7 @@ just record the choice.
 
 | ADR | Title | Status |
 |---|---|---|
+| [0000](0000-record-architecture-decisions.md) | Record architecture decisions | Accepted |
 | [0001](0001-prompts-and-schemas-as-versioned-macros.md) | Prompts and schemas as versioned Jinja macros | Accepted |
 | [0002](0002-chunking-as-token-bounded-unit-packing.md) | Chunking as token-bounded unit packing | Accepted |
 | [0003](0003-cost-as-a-first-class-output.md) | Cost as a first-class output: guard + run log | Accepted |
@@ -53,6 +54,10 @@ of the discipline.
 
 ## Conventions
 
-- Numbered `NNNN-kebab-title.md`; numbers are stable and never reused.
+- Numbered `NNNN-kebab-title.md`; numbers are stable and never reused. `0000` is the meta-record
+  that establishes this practice.
+- Copy `template.md` to start a record. Each record carries Status, Concept, Context, Decision,
+  Reasoning, Consequences, an optional Alternatives considered, and Glossary.
+- The `## Status` line states the status and the date, for example `Accepted, 2026-07-30.`.
 - A decision is never edited to say something different — supersede it with a new ADR and flip the
   old one's status to `Superseded by ADR-XXXX`. (Small factual amendments are noted inline, dated.)

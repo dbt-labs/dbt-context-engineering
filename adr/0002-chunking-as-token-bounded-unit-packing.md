@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted.
+Accepted, 2026-07-30.
 
 ## Concept
 

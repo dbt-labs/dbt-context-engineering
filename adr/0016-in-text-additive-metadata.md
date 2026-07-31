@@ -1,7 +1,8 @@
-# 5. `in_text` embeds metadata in addition to the columns, never instead of them
+# 16. `in_text` embeds metadata in addition to the columns, never instead of them
 
-- Status: Accepted
-- Date: 2026-07-30
+## Status
+
+Accepted, 2026-07-30.
 
 ## Concept
 
@@ -73,8 +74,8 @@ both cases without a second code path to maintain.
 - **The cost is deliberate duplication.** On an embedded row the metadata exists twice, and
   `in_text=true` adds tokens the model pays for. That token cost is the intent, and
   `token_estimate` is recomputed so it stays honest.
-- See [0002](0002-attach-metadata-as-a-separate-macro.md) for why attach is a separate macro, and
-  [0003](0003-generic-metadata-explicit-provenance.md) for why the columns are treated uniformly.
+- See [0013](0013-attach-metadata-as-a-separate-macro.md) for why attach is a separate macro, and
+  [0014](0014-generic-metadata-explicit-provenance.md) for why the columns are treated uniformly.
 
 ## Glossary
 

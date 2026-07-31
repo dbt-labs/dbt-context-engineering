@@ -1,7 +1,8 @@
-# 2. Attach source metadata as a separate, non-dispatched macro
+# 13. Attach source metadata as a separate, non-dispatched macro
 
-- Status: Accepted
-- Date: 2026-07-30
+## Status
+
+Accepted, 2026-07-30.
 
 ## Concept
 
@@ -80,8 +81,8 @@ dispatched version would add indirection with nothing to hide behind it.
   chosen value.
 - **The cost is one extra model and step** in the pipeline rather than a flag on an existing model.
 - This **supersedes the parameters-on-`ce_chunk` approach**. See
-  [0003](0003-generic-metadata-explicit-provenance.md) for how the columns are treated and
-  [0005](0005-in-text-additive-metadata.md) for what `in_text` does.
+  [0014](0014-generic-metadata-explicit-provenance.md) for how the columns are treated and
+  [0016](0016-in-text-additive-metadata.md) for what `in_text` does.
 
 ## Glossary
 

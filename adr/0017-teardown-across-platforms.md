@@ -1,7 +1,8 @@
-# 6. Teardown works on every integration platform to support iteration
+# 17. Teardown works on every integration platform to support iteration
 
-- Status: Accepted
-- Date: 2026-07-30
+## Status
+
+Accepted, 2026-07-30.
 
 ## Concept
 

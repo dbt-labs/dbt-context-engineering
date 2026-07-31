@@ -1,7 +1,8 @@
-# 3. Metadata is generic in the transform macro, provenance is explicit in the knowledge base
+# 14. Metadata is generic in the transform macro, provenance is explicit in the knowledge base
 
-- Status: Accepted
-- Date: 2026-07-30
+## Status
+
+Accepted, 2026-07-30.
 
 ## Concept
 
@@ -79,7 +80,7 @@ its reuse and buys nothing, since the transform never needs to act on the distin
   its source object. The cost is a fixed column that sources without a link populate as `NULL`.
 - **The two layers handle provenance differently by design.** This record exists so the difference
   reads as a deliberate choice rather than an inconsistency.
-- See [0002](0002-attach-metadata-as-a-separate-macro.md) for why attach is a separate macro.
+- See [0013](0013-attach-metadata-as-a-separate-macro.md) for why attach is a separate macro.
 
 ## Glossary
 

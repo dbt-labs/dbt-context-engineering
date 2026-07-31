@@ -1,7 +1,8 @@
-# 4. Functional test parity across all integration tiers
+# 15. Functional test parity across all integration tiers
 
-- Status: Accepted
-- Date: 2026-07-30
+## Status
+
+Accepted, 2026-07-30.
 
 ## Concept
 
@@ -26,7 +27,7 @@ That makes a green cloud build misleading. It means "the SQL compiled and ran on
 "the output is correct." For deterministic models like the metadata attach, which behave identically
 on every engine, the cloud copies were effectively decorative, and a per-dialect bug in the
 assembled SQL could pass unnoticed, which is precisely the failure mode ADR
-[0002](0002-attach-metadata-as-a-separate-macro.md) hit on BigQuery.
+[0013](0013-attach-metadata-as-a-separate-macro.md) hit on BigQuery.
 
 Two ways to write the cloud tests:
 
@@ -69,7 +70,7 @@ lets that failure surface as red rather than pass silently.
 - **A green build means the same thing on every tier**: correct output, not just successful
   compilation.
 - **`unique(chunk_id)` doubles as the dependency guard** from
-  [0002](0002-attach-metadata-as-a-separate-macro.md), so a broken metadata dependency fails a test
+  [0013](0013-attach-metadata-as-a-separate-macro.md), so a broken metadata dependency fails a test
   rather than passing silently.
 - **The cost is more test files per project** and the discipline of keeping the four tiers in step
   when a metadata model changes.

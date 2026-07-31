@@ -22,15 +22,19 @@ those systems read.
 
 Built **one phase at a time behind approval gates** — see `CLAUDE.md` and `tasks/`. Phase 0
 (scaffolding), Phase 1 (chunking — `ce_chunk`), Phase 2 (AI function wrappers + prompt library +
-cost guard), Phase 3 (run log + reconciliation), Phase 4 (incremental pattern +
+cost guard), Phase 3 (run log), Phase 4 (incremental pattern +
 `ce_version_guard`), Phase 5 (retrieval — `ce_vector_search` + opt-in `ce_create_vector_index`),
-and Phase 6 (knowledge base — `ce_knowledge_base`) are complete. Testing posture: the cloud AI
+Phase 6 (knowledge base — `ce_knowledge_base`), and Phase 7 (context evaluation & groundedness —
+`ce_grounded`, `ce_conforms_to_schema`, `ce_eval`) are complete. Testing posture: the cloud AI
 calls (`ce_generate`, `ce_classify`, `ce_extract`, `ce_embed`, `ce_vector_search`) have **executed
 successfully on all three engines** (Snowflake, Databricks, BigQuery) against mock sample data,
 alongside **full deterministic execution on duckdb** of chunking, prompt resolution/rendering, the
 cost guard, and the AI run log. Not yet validated: execution against real production data at
 scale, and cost reconciliation against engine usage tables (built, LIVE-VALIDATION DEFERRED). See
 `docs/DECISIONS.md`.
+**How to run the tests in each environment — and what to check in the results — is in `TESTING.md`.**
+**Every macro is defined with its signature and usage in the [Macro reference](#macro-reference) below.**
+**The *why* behind each major design choice is recorded as ADRs in [`adr/`](adr/README.md).**
 
 ## Repo map
 
@@ -51,6 +55,7 @@ macros/
   incremental/             # ce_version_guard
   retrieval/               # ce_vector_search
   operations/              # ce_create_vector_index (run-operation only)
+  evaluation/              # ce_grounded / ce_conforms_to_schema / ce_eval (+ ce_contains/ce_collapse_ws/ce_norm_text/ce_schema_enum)
 models/audit/              # ce_ai_run_log (append-only usage/cost log)
 prompts/                   # prompt+schema library — one Jinja macro per name+version (D4)
 seeds/                     # synthetic fixtures (no real customer data)
@@ -180,6 +185,34 @@ literals; `ce_guard_batch` is the pre-hook circuit breaker so no AI call runs un
 Prompt/guard/chunking logic is validated on duckdb; the AI calls have executed on all three cloud
 engines against mock sample data.
 
+### Reading the AI result back — `ce_text` / `ce_field`
+
+The wrappers normalize how you *call* the model, but the raw return **shape** still differs per
+engine (Snowflake VARIANT object, Databricks JSON string, BigQuery STRUCT). Two accessors make
+the output portable too, so downstream models never branch on the engine:
+
+```sql
+-- models/signals.sql — call once (structured), then flatten to typed scalars
+with raw as (
+    select
+        call_id,
+        {{ dbt_context_engineering.ce_generate('segment_text',
+            dbt_context_engineering.ce_prompt('EXAMPLE_signal_classify','v3'),
+            dbt_context_engineering.ce_schema('EXAMPLE_signal_classify','v3')) }} as result
+    from {{ ref('stg_gong__transcripts') }}
+)
+select
+    call_id,
+    {{ dbt_context_engineering.ce_field('result', 'signal') }}   as signal,     -- typed scalar, any engine
+    {{ dbt_context_engineering.ce_field('result', 'evidence') }} as evidence
+from raw
+```
+
+- `ce_text(result)` — plain text of an **unstructured** `ce_generate` (no schema).
+- `ce_field(result, 'name', as_type)` — one field out of a **structured** result (`ce_generate`
+  with a schema, or `ce_extract`), cast to `as_type` (defaults to string). Flatten with this
+  before `ce_conforms_to_schema`. `ce_embed` is the exception — it already returns a usable vector.
+
 ## Governed incremental AI model (Phases 2–4 together)
 
 The full pattern — process only new rows, re-embed on a version bump, guard cost, log every run:
@@ -261,8 +294,234 @@ Then account-scoped retrieval across all sources at once:
 All embeddings must come from the same model (see `ce_version_guard`). A managed hybrid index
 over the mart is the opt-in scale step (`ce_create_vector_index`).
 
+## Context evaluation & groundedness (Phase 7)
+
+Context is only useful if it's *trustworthy*. Phase 7 makes AI outputs testable like any other
+dbt object — deterministic, no warehouse, no AI spend.
+
+**`ce_grounded`** — a generic (schema.yml) test asserting each row's evidence/quote actually
+appears in its source text, so a hallucinated quote fails the build. Normalization (case-fold +
+whitespace-collapse) defaults on; set both false for byte-exact grounding.
+
+```yaml
+columns:
+  - name: evidence
+    tests:
+      - dbt_context_engineering.ce_grounded:
+          source_text_column: segment_text   # ignore_case / normalize_whitespace / allow_empty are optional
+```
+
+**`ce_conforms_to_schema`** — a singular-test macro asserting a classify/extract column only holds
+values from the enum declared by its `ce_schema`, catching invented labels. The allowed set is
+resolved from the same schema macro the wrapper used, so it can never drift into a hand-copied
+list. (It's a macro rather than a generic test because resolving a versioned schema by name needs
+`ce_schema`'s dynamic dispatch, which only renders in model/singular-test context.)
+
+```sql
+-- tests/assert_signals_conform.sql
+{{ dbt_context_engineering.ce_conforms_to_schema(ref('ce_signals'), 'signal',
+                                                 'EXAMPLE_signal_classify', 'v3') }}
+```
+
+**`ce_eval`** — scores predicted labels against a golden/expected column, emitting tidy
+`metric, label, value` rows (accuracy + per-label precision/recall). It reads pre-computed
+predictions, so it runs with zero AI spend; wrap it in a model and threshold a metric with a test
+to gate a prompt/model change. Pass `prompt_version` to stamp rows and snapshot metrics over time
+for drift tracking.
+
+```sql
+-- models/signal_eval.sql
+{{ dbt_context_engineering.ce_eval(ref('signal_predictions'), 'predicted_label', 'expected_label') }}
+```
+
+All three are validated end to end on duckdb (both pass and catch directions). The only
+per-engine divergence is the containment / whitespace primitives (`ce_contains`,
+`ce_collapse_ws`), isolated behind dispatch — see `docs/PARITY.md`.
+
+## Macro reference
+
+Every public object in the package. All are called **package-qualified**
+(`dbt_context_engineering.<name>(...)`), like `dbt_utils.*`. Args shown with `=` have defaults.
+
+### Prompts & schemas
+
+**`ce_prompt(name, version)`** — resolves the versioned prompt macro
+`ce_prompt__<name>__<version>` (under `prompts/`) to a compile-time string literal. Explicit
+versions only — no implicit "latest".
+```sql
+dbt_context_engineering.ce_prompt('EXAMPLE_signal_classify', 'v3')
+```
+
+**`ce_schema(name, version)`** — same, for the output JSON schema macro
+`ce_schema__<name>__<version>`. The schema's `enum` is the taxonomy; it should include an
+evidence/quote field so every extracted fact carries its source text.
+
+**`ce_render_prompt(prompt, input_column)`** — turns a resolved prompt into a portable SQL string
+expression, substituting the `{{ input }}` placeholder with the row's input column. Used internally
+by every AI wrapper; call it directly only if you're hand-building a prompt expression.
+
+**`ce_augment_prompt(prompt, output_schema)`** — prepends an explicit "allowed values" block for
+each `enum` field in the schema. Used by the **BigQuery** wrappers so the model is constrained even
+though BigQuery's `output_schema` can't carry an enum (Snowflake/Databricks enforce it natively).
+No-op when there's no enum. You normally don't call this directly.
+
+### AI functions
+
+The four row-level AI operations. Each takes an `input_column` (a column name as a string), a
+resolved `prompt`, an optional `output_schema`, and an optional `model` (defaults to the matching
+`ce_model_*` var). Each returns a SQL expression you place in a `select`.
+
+**`ce_generate(input_column, prompt, output_schema=none, model=none)`** — free-form generation.
+Returns plain text, or a structured object if you pass `output_schema`. The general-purpose one.
+
+**`ce_classify(input_column, prompt=none, output_schema=none, model=none)`** — single-label
+classification. `output_schema` is **required**; its `enum` is the label set. Returns the chosen
+label as a **scalar string** on all three engines.
+
+**`ce_extract(input_column, prompt=none, output_schema=none, model=none)`** — typed extraction.
+`output_schema` is **required** (the extraction contract); returns a structured record with all its
+fields. Use it to pull fields *present in the text* (include an `evidence` field for groundedness).
+
+**`ce_embed(input_column, model=none)`** — row-level embedding. Returns a vector column. The model
+is pinned via `ce_embedding_model` (a corpus embedded by one model can't be searched by another).
+
+```sql
+-- classify (scalar label) + guard + log, the governed pattern
+{{ config(
+  pre_hook  = "{{ dbt_context_engineering.ce_guard_batch(ref('stg'), 'text') }}",
+  post_hook = "{{ dbt_context_engineering.ce_log_ai_run('classify', model_name=var('ce_model_classify'), relation=ref('stg'), input_column='text') }}"
+) }}
+select id,
+  {{ dbt_context_engineering.ce_classify('text',
+      dbt_context_engineering.ce_prompt('EXAMPLE_signal_classify','v3'),
+      dbt_context_engineering.ce_schema('EXAMPLE_signal_classify','v3')) }} as signal
+from {{ ref('stg') }}
+```
+
+#### generate vs. classify vs. extract — which to use
+
+They overlap when handed the same schema, but the intent differs:
+
+| | `ce_generate` | `ce_classify` | `ce_extract` |
+|---|---|---|---|
+| Returns | free text, or a structured object | one **scalar label** | a **typed record** (all schema fields) |
+| `output_schema` | optional | required (its `enum` = labels) | required (the contract) |
+| Native fn (SF / DBX / BQ) | `AI_COMPLETE` / `ai_query` / `AI.GENERATE` | `AI_CLASSIFY` / `ai_classify` / `AI.GENERATE` | `AI_EXTRACT` / `ai_query` / `AI.GENERATE` |
+| Intent | may invent/summarize | pick from a closed set | pull what's in the text (grounded) |
+
+Reach for **classify** when you only need the bucket; **extract** when you need the label *plus* a
+quote or several typed fields; **generate** for free text (summary, rewrite, answer) or a bespoke
+JSON. `ce_generate` + a schema and `ce_extract` overlap (on BigQuery they're the same call); extract
+is the "schema is the point / stay grounded" specialization that maps to dedicated extract functions.
+
+### Reading AI output back
+
+The wrappers normalize the *call*; these normalize the *result* (Snowflake VARIANT / Databricks
+JSON string / BigQuery STRUCT). `ce_classify` and `ce_embed` already return usable scalars/vectors.
+
+**`ce_text(ai_result)`** — the plain text of an **unstructured** `ce_generate` (no schema).
+
+**`ce_field(ai_result, field, as_type=none)`** — one field out of a **structured** result
+(`ce_generate` with a schema, or `ce_extract`), cast to `as_type` (defaults to string). Flatten with
+this before `ce_conforms_to_schema`.
+```sql
+{{ dbt_context_engineering.ce_field('result', 'signal') }} as signal
+```
+
+### Chunking
+
+**`ce_chunk(relation, id_column, order_column, text_column, partition_column=none, label_column=none, target_tokens=none, overlap_tokens=none, join_separator='\n')`** — packs ordered atomic *units*
+(rows) into token-bounded chunks that never split a unit or cross `partition_column`, carrying each
+unit's id into `source_rows` (lineage). Deterministic, no AI. Defaults: `target_tokens=512`,
+`overlap_tokens=0`. Output: `chunk_id, partition_key, chunk_seq, source_rows, chunk_text,
+n_source_rows, token_estimate`.
+
+**`ce_split_sentences(relation, id_column, text_column)`** — splits one text row into one row per
+sentence (`sentence_id, document_id, sentence_index, sentence_text`) to feed `ce_chunk`. Naive
+`[.!?]` boundaries; for better splitting use a real tokenizer upstream.
+
+### Cost & audit
+
+**`ce_guard_batch(relation, input_column=none)`** — **pre-hook** circuit breaker: counts rows +
+estimated tokens of the input and **raises before the model runs** if it exceeds `ce_max_batch_rows`
+/ `ce_max_est_tokens`. No AI call ships without one.
+
+**`ce_estimate_tokens(text_expression)`** — a SQL expression estimating tokens (`ceil(len/4)`), no
+AI. Shared by the guard and the log.
+
+**`ce_log_ai_run(function_name, model_name=none, relation=none, input_column=none)`** — **post-hook**
+that appends one row (model, function, row count, est tokens/cost, timestamp, invocation id) to the
+`ce_ai_run_log` model. `relation` defaults to `this`.
+
+**`ce_ai_run_log`** *(model)* — the append-only incremental usage/cost log the post-hook writes to.
+
+### Incremental / versioning
+
+**`ce_version_guard(pinned_version, version_column='model_version')`** → **bool**. Returns `True`
+when an incremental model must **reprocess all rows** (first build, `--full-refresh`, or the stored
+version differs from `pinned_version`); drive your model's delta `WHERE` with it and pair with a
+`unique_key` so a version bump re-embeds the whole corpus.
+```sql
+{% if not dbt_context_engineering.ce_version_guard(var('ce_embedding_model')) %}
+where doc_id not in (select doc_id from {{ this }})
+{% endif %}
+```
+
+### Retrieval & knowledge base
+
+**`ce_vector_search(relation, embedding_column, query_embedding, top_k=10, id_column=none, select_columns=none, filter=none)`** — ranked cosine similarity over an embedding **column**
+(brute-force; no index). Returns `[id_column, select_columns..., score]` ordered, `top_k`. `filter`
+restricts the candidate set (e.g. account scoping).
+
+**`ce_create_vector_index(name, relation, column, attributes=[], warehouse=none, target_lag='1 day', embedding_model=none, distance_type='COSINE', index_type='IVF', storing=[])`** — **opt-in,
+`dbt run-operation` ONLY** (never a model). Builds the engine's external, separately-billed index/
+service (Snowflake Cortex Search, BigQuery vector index; Databricks is API-created). Drop it
+explicitly when done.
+
+**`ce_knowledge_base(sources)`** — unions many pre-embedded source relations into one common-shape
+mart (`source_type, source_id, account_key, text, embedding, ts`) with per-source lineage. `sources`
+is a list of dicts (`relation, source_type, source_id, account_key, text, embedding, timestamp`);
+register a source by adding one dict.
+
+### Evaluation & groundedness
+
+**`ce_grounded`** *(generic test)* — attach in `schema.yml` to an evidence column; fails a row whose
+quote isn't a substring of `source_text_column` (after optional case-fold / whitespace-collapse).
+Args: `source_text_column` (required), `ignore_case=true`, `normalize_whitespace=true`,
+`allow_empty=false`.
+
+**`ce_conforms_to_schema(relation, column, schema_name, schema_version, property=none, allow_null=false)`** — a macro for a **singular test**: returns the rows whose `column` value isn't in the
+`ce_schema` enum. Point it at a flattened scalar (use `ce_field` first).
+
+**`ce_eval(relation, prediction_column, expected_column, prompt_version=none)`** — scores predictions
+vs. a golden column → `metric, label, value` rows (accuracy + per-label precision/recall). No AI.
+Threshold a metric with a test to gate a prompt/model change.
+
+### Internal helpers
+
+Part of the surface but rarely called directly — they isolate per-engine divergence or introspect
+schemas:
+
+| Macro | Purpose |
+|---|---|
+| `ce_array_agg(expr, order_expr)` / `ce_string_agg(expr, sep, order_expr)` | dispatched ordered array / string aggregation (the one divergence inside `ce_chunk`) |
+| `ce_contains(haystack, needle)` | dispatched substring test (BigQuery `STRPOS` vs ANSI `POSITION … IN`) — backs `ce_grounded` |
+| `ce_collapse_ws(expr)` | dispatched trim + whitespace-collapse — backs `ce_norm_text` |
+| `ce_norm_text(expr, ignore_case=false, normalize_whitespace=false)` | composes `lower()` + `ce_collapse_ws` for grounding |
+| `ce_schema_enum(output_schema, property=none)` | the allowed-value list from a schema (backs conformance) |
+| `ce_schema_categories(output_schema)` / `ce_schema_label_field(output_schema)` | the enum values / the enum property name (used by `ce_classify`) |
+| `ce_bq_output_schema(json_schema)` | JSON schema → BigQuery `name TYPE` list |
+| `ce_bq_model_params(max_output_tokens, thinking_budget)` | BigQuery `model_params` JSON (output cap + thinking budget) |
+| `ce_str_literal(s)` | a portable SQL string literal (newlines as `chr(10)` for BigQuery) |
+| `ce_require_bq_model()` / `ce_require_databricks_serverless()` | prerequisite checks (BigQuery advisory; Databricks runtime check deferred — currently a no-op) |
+
 ## Configuration
 
-All divergent prerequisites are `vars` (see `dbt_project.yml` §8), visible and documented —
-never inferred. BigQuery additionally requires `ce_bq_connection` + `ce_bq_model` (a MODEL
-over a Vertex connection, created as a setup step).
+All divergent prerequisites are `vars` (see `dbt_project.yml`), visible and documented — never
+inferred. Key vars: `ce_model_generate` / `ce_model_classify` / `ce_model_extract` and
+`ce_embedding_model` (per-function model names — always explicit); `ce_chunk_target_tokens` /
+`ce_chunk_overlap_tokens`; `ce_max_batch_rows` / `ce_max_est_tokens` (guard ceilings);
+`ce_max_output_tokens` and `ce_bq_thinking_budget` (output-side cost control — the latter is
+BigQuery/Gemini-only, `0` disables billed "thinking"); `ce_cost_per_1k_tokens` (for logged
+`est_cost`). BigQuery's `ce_bq_connection` is **optional** (End-User Credentials cover interactive
+queries; the `AI.*` functions need no `CREATE MODEL` — see `docs/PARITY.md`).

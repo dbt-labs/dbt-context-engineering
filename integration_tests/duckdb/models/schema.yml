@@ -54,6 +54,31 @@ models:
       - name: guarded_rows
         tests: [not_null]
 
+  - name: ce_eval_predictions
+    description: "Phase 7 golden-set fixture. Clean by construction, so the two evaluation generic
+      tests below must pass (their catch-behavior is proven in assert_grounded / assert_conforms)."
+    columns:
+      - name: example_id
+        tests: [unique, not_null]
+      - name: evidence
+        description: "Each quote is grounded in input_text — ce_grounded asserts it."
+        tests:
+          - dbt_context_engineering.ce_grounded:
+              source_text_column: input_text
+      - name: predicted_label
+        description: "Must be one of the EXAMPLE_signal_classify v3 taxonomy labels (asserted by
+          the assert_conforms singular test, which resolves the enum from ce_schema)."
+
+  - name: ce_eval_metrics
+    description: "ce_eval output (accuracy + per-label precision/recall). Values asserted in
+      assert_eval_metrics. `value` is intentionally nullable — precision is undefined (null) for a
+      label that was never predicted."
+    columns:
+      - name: metric
+        tests: [not_null]
+      - name: label
+        tests: [not_null]
+
   - name: ce_chunk_metadata_cols
     description: "ce_attach_metadata over ce_chunk_docs (default in_text=False) — title/citation_url pass through as columns only."
     columns:

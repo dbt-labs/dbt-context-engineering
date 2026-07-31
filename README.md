@@ -25,10 +25,13 @@ Built **one phase at a time behind approval gates** — see `CLAUDE.md` and `tas
 cost guard), Phase 3 (run log), Phase 4 (incremental pattern +
 `ce_version_guard`), Phase 5 (retrieval — `ce_vector_search` + opt-in `ce_create_vector_index`),
 Phase 6 (knowledge base — `ce_knowledge_base`), and Phase 7 (context evaluation & groundedness —
-`ce_grounded`, `ce_conforms_to_schema`, `ce_eval`) are complete. Testing posture is
-**structure-only** for cloud AI calls (assembled per-dialect SQL is validated, execution deferred
-until credentials land), plus **full deterministic execution on duckdb** of chunking, prompt
-resolution/rendering, the cost guard, and the AI run log. See `docs/DECISIONS.md`.
+`ce_grounded`, `ce_conforms_to_schema`, `ce_eval`) are complete. Testing posture: the cloud AI
+calls (`ce_generate`, `ce_classify`, `ce_extract`, `ce_embed`, `ce_vector_search`) have **executed
+successfully on all three engines** (Snowflake, Databricks, BigQuery) against mock sample data,
+alongside **full deterministic execution on duckdb** of chunking, prompt resolution/rendering, the
+cost guard, and the AI run log. Not yet validated: execution against real production data at
+scale, and cost reconciliation against engine usage tables (built, LIVE-VALIDATION DEFERRED). See
+`docs/DECISIONS.md`.
 **How to run the tests in each environment — and what to check in the results — is in `TESTING.md`.**
 **Every macro is defined with its signature and usage in the [Macro reference](#macro-reference) below.**
 **The *why* behind each major design choice is recorded as ADRs in [`adr/`](adr/README.md).**
@@ -47,6 +50,7 @@ macros/
   functions/               # ce_generate/classify/extract/embed (adapter.dispatch) + prereq checks
   prompts/                 # ce_prompt / ce_schema (macro-library loader, D4) + ce_render_prompt
   chunking/                # ce_chunk (unit packing) + ce_split_sentences (layer-1 splitter) + ce_array_agg/ce_string_agg
+  metadata/                # ce_attach_metadata (non-dispatched: join source-level metadata onto chunks)
   cost/                    # ce_guard_batch (guard) / ce_estimate_tokens / ce_log_ai_run
   incremental/             # ce_version_guard
   retrieval/               # ce_vector_search
@@ -101,6 +105,63 @@ Deterministic tests run on **duckdb** (no cloud credentials): `integration_tests
 `ce_chunk` and the `ce_split_sentences → ce_chunk` pipeline are also confirmed live on all three
 cloud engines.
 
+### Metadata on chunks (`ce_attach_metadata`)
+
+`ce_chunk` and `ce_split_sentences` know nothing about metadata, and stay that way on
+purpose. Carrying a source-level field (title, a resolvable citation link, call participants)
+onto every chunk row is a `distinct` collapse and a join, plain ANSI SQL with no per-engine
+divergence to hide, so it doesn't belong inside a dispatched macro. `ce_attach_metadata` is a
+separate, portable macro that composes with their unmodified output as a step after chunking.
+`metadata_columns` is semantically agnostic: pass frontmatter fields (customer, participants),
+provenance fields (citation_url, recording_url), or any other source-level columns.
+
+```sql
+-- documents -> sentences -> token-bounded chunks (both steps unmodified)
+{{ dbt_context_engineering.ce_split_sentences(
+    relation    = ref('stg__documents'),
+    id_column   = 'document_id',
+    text_column = 'document_text'
+) }}
+```
+
+```sql
+{{ dbt_context_engineering.ce_chunk(
+    relation         = ref('stg_docs_split'),   -- the ce_split_sentences output above
+    id_column        = 'sentence_id',
+    order_column     = 'sentence_index',
+    text_column      = 'sentence_text',
+    partition_column = 'document_id'
+) }}
+```
+
+```sql
+-- attach title/citation_url from the ORIGINAL document-level table, joined on document_id
+{{ dbt_context_engineering.ce_attach_metadata(
+    chunks_relation      = ref('stg_docs_chunks'),   -- the ce_chunk output above
+    metadata_relation    = ref('stg__documents'),    -- the document-level table, pre-split
+    metadata_key_column  = 'document_id',
+    metadata_columns     = ['title', 'citation_url'],
+    in_text              = false                     -- default: columns only, not embedded
+) }}
+```
+
+Same macro, different source. Call-level metadata works identically:
+
+```sql
+{{ dbt_context_engineering.ce_attach_metadata(
+    chunks_relation      = ref('stg_call_chunks'),
+    metadata_relation    = ref('stg__calls'),
+    metadata_key_column  = 'call_id',
+    metadata_columns     = ['customer', 'participants', 'recording_url']
+) }}
+```
+
+Each `metadata_columns` value must be constant per key (source-level, not unit-level). The macro
+collapses `metadata_relation` with `distinct`, so a key carrying conflicting values fans out the
+join and fails the `chunk_id` uniqueness test rather than silently keeping one value. Pass
+`in_text=True` to also prepend a `"col: value"` block to `chunk_text` on every chunk, so the
+embedding or LLM sees it; `token_estimate` is recomputed to match.
+
 ## The dispatch pattern
 
 Every engine-specific macro uses `adapter.dispatch`. Users call one macro; the correct
@@ -121,7 +182,8 @@ from {{ ref('stg_gong__transcripts') }}
 
 `ce_prompt`/`ce_schema` resolve versioned prompt macros (under `prompts/`) to compile-time
 literals; `ce_guard_batch` is the pre-hook circuit breaker so no AI call runs unguarded.
-Prompt/guard/chunking logic is validated on duckdb; the AI calls themselves are cloud-deferred.
+Prompt/guard/chunking logic is validated on duckdb; the AI calls have executed on all three cloud
+engines against mock sample data.
 
 ### Reading the AI result back — `ce_text` / `ce_field`
 
@@ -199,19 +261,23 @@ explicitly. Databricks indexes are created via its Vector Search API, not SQL.
 ## Knowledge base (Phase 6)
 
 `ce_knowledge_base` unifies multiple pre-embedded sources (tickets, calls, notes, …) into one
-mart with a common shape — `source_type, source_id, account_key, text, embedding, ts` — so a
-single search answers "everything about account X" across systems, with per-source lineage
-carried into results. **Register a new source** by adding one dict to the list:
+mart with a common shape — `source_type, source_id, account_key, text, embedding, ts,
+citation_url` — so a single search answers "everything about account X" across systems, with
+per-source lineage and a resolvable citation link carried into results. **Register a new
+source** by adding one dict to the list; `citation_url` is optional per source (omit it for a
+source with no resolvable link and that source's rows get `NULL`):
 
 ```sql
 -- models/knowledge_base.sql
 {{ dbt_context_engineering.ce_knowledge_base([
     {'relation': ref('stg_tickets'), 'source_type': 'ticket',
      'source_id': 'ticket_id', 'account_key': 'account_id',
-     'text': 'body', 'embedding': 'embedding', 'timestamp': 'created_at'},
+     'text': 'body', 'embedding': 'embedding', 'timestamp': 'created_at',
+     'citation_url': 'ticket_url'},
     {'relation': ref('stg_calls'),   'source_type': 'call',
      'source_id': 'call_id',   'account_key': 'account_id',
-     'text': 'transcript', 'embedding': 'embedding', 'timestamp': 'call_time'}
+     'text': 'transcript', 'embedding': 'embedding', 'timestamp': 'call_time',
+     'citation_url': 'call_url'}
 ]) }}
 ```
 
@@ -221,7 +287,7 @@ Then account-scoped retrieval across all sources at once:
 {{ dbt_context_engineering.ce_vector_search(
     relation=ref('knowledge_base'), embedding_column='embedding',
     query_embedding=dbt_context_engineering.ce_embed('renewal risk'),
-    id_column='source_id', select_columns=['source_type'],
+    id_column='source_id', select_columns=['source_type', 'citation_url'],
     filter="account_key = 'acme'") }}
 ```
 

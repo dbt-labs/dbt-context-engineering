@@ -32,6 +32,9 @@ just record the choice.
 | [0015](0015-functional-test-parity-across-tiers.md) | Functional test parity across all integration tiers | Accepted |
 | [0016](0016-in-text-additive-metadata.md) | `in_text` embeds metadata in addition to the columns, never instead of them | Accepted |
 | [0017](0017-teardown-across-platforms.md) | Teardown works on every integration platform to support iteration | Accepted |
+| [0018](0018-snowflake-extract-via-ai-complete.md) | Converge the Snowflake extract path onto AI_COMPLETE | Accepted |
+| [0019](0019-run-log-assertion-scoped-to-invocation.md) | Scope the run-log assertion to the current invocation | Accepted |
+| [0020](0020-run-log-standin-duckdb-only.md) | The no-AI run-log stand-in exists only on the duckdb tier | Accepted |
 
 ## New here? A reading path
 
@@ -59,7 +62,10 @@ of the discipline.
    - [0011](0011-lineage-and-citations-as-a-first-class-invariant.md) — lineage & citations end to end
    - [0007](0007-context-evaluation-and-groundedness.md) — evaluation & groundedness
    - [0009](0009-portable-enum-enforcement-via-prompt-injection.md) — portable enum enforcement
+   - [0018](0018-snowflake-extract-via-ai-complete.md) — Snowflake extract via AI_COMPLETE (structural enum enforcement)
    - [0015](0015-functional-test-parity-across-tiers.md) — functional test parity across integration tiers
+   - [0019](0019-run-log-assertion-scoped-to-invocation.md) — run-log assertion scoped to the current invocation
+   - [0020](0020-run-log-standin-duckdb-only.md) — the no-AI run-log stand-in exists only on the duckdb tier
    - [0017](0017-teardown-across-platforms.md) — teardown across platforms to support iteration
 
 ## Conventions

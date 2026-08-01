@@ -1,28 +1,34 @@
--- ce_log_ai_run must append exactly one row for ce_logged_model's run, sized from the seed and
--- with est_cost null (no price var). Returns rows only on failure. Compares against a fresh
--- computation rather than magic numbers.
--- The post-hook side-effect is invisible to the DAG, so force this test to run AFTER the model
--- that populates the log:
+-- ce_log_ai_run must append exactly one correct row per run (see ADR-0019). ce_ai_run_log is
+-- append-only and grows across dbt builds, so this scopes to THIS invocation via invocation_id
+-- rather than a table-wide count (which fails on any second build). For this run it asserts exactly
+-- one classify row, valid and sized from the seed using the same ce_estimate_tokens / price the
+-- logger uses. Rows only on failure; expected values are computed, not magic numbers. The post-hook
+-- side effect is invisible to the DAG, so depend on the logging model to run after it:
 -- depends_on: {{ ref('ce_logged_model') }}
+{% set price = var('ce_cost_per_1k_tokens', none) %}
 with log as (
     select * from {{ ref('ce_ai_run_log') }}
+    where invocation_id = '{{ invocation_id }}' and function_name = 'classify'
 ),
-bad_values as (
-    select 'bad_values' as issue
-    from log
-    where function_name <> 'classify'
-       or model_name <> 'test-model'
-       or row_count <> (select count(*) from {{ ref('ce_fixture_utterances') }})
-       or est_tokens <> (select coalesce(sum(ceil(length(utterance_text) / 4.0)), 0) from {{ ref('ce_fixture_utterances') }})
-       or est_cost is not null
-       or invocation_id is null
-       or run_at is null
+expected as (
+    select
+        (select count(*) from {{ ref('ce_fixture_utterances') }}) as exp_row_count,
+        (select coalesce(sum({{ dbt_context_engineering.ce_estimate_tokens('utterance_text') }}), 0)
+         from {{ ref('ce_fixture_utterances') }}) as exp_est_tokens
 ),
 bad_count as (
     select 'bad_count' as issue
-    from log
-    having count(*) <> 1
+    from (select count(*) as n from log) c
+    where c.n <> 1
+),
+bad_values as (
+    select 'bad_values' as issue
+    from log cross join expected
+    where log.model_name is null
+       or log.row_count <> expected.exp_row_count
+       or log.est_tokens <> expected.exp_est_tokens
+       or log.run_at is null
+       {% if price is none %}or log.est_cost is not null{% else %}or log.est_cost <> cast(expected.exp_est_tokens / 1000.0 * {{ price }} as {{ dbt.type_numeric() }}){% endif %}
 )
-select * from bad_values
-union all
 select * from bad_count
+union all select * from bad_values

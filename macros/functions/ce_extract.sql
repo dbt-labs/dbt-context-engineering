@@ -22,16 +22,26 @@
 
 
 {% macro snowflake__ce_extract(input_column, prompt, output_schema, model) -%}
-    {#- AI_EXTRACT uses camelCase `responseFormat`; JSON-schema mode nests the schema under a
-        `schema` key ("if responseFormat contains the schema key, define all fields within it").
-        Its result is an envelope {"error":…, "response": {<fields>}} (CONFIRMED live 2026-07-29);
-        unwrap `:response` so ce_extract returns the fields object directly — uniform with the
-        Databricks (JSON string) / BigQuery (STRUCT) shapes, so ce_field('col','name') reads it the
-        same way on every engine. -#}
-    (ai_extract(
-        text => {{ dbt_context_engineering.ce_render_prompt(prompt, input_column) }},
-        responseFormat => {'schema': parse_json($${{ output_schema }}$$)}
-    )):response
+    {#- Converged onto AI_COMPLETE + response_format (issue #3, ADR-0018). AI_EXTRACT cannot enforce a
+        schema `enum` (its responseFormat supports only a string scalar) and returns the string "None"
+        for a field it cannot fill, so it produced off-taxonomy and "None" signals. AI_COMPLETE binds
+        the `enum` structurally (proven live) and returns the fields object directly, no `:response`
+        envelope, so ce_field reads it the same as ce_generate's output. This matches how Databricks
+        (ai_query) and BigQuery (AI.GENERATE) already implement extract: extract is the engine's
+        structured-generate primitive. `evidence` is optional in the schema, so a genuinely quote-less
+        row yields null rather than a fabricated citation (AI_COMPLETE invents a value for a required
+        field it cannot fill; confirmed live 2026-07-31). -#}
+    {%- set model = model or var('ce_model_extract', var('ce_model_generate', none)) -%}
+    {%- if model is none -%}{{ exceptions.raise_compiler_error("ce_extract: set var ce_model_extract or ce_model_generate (Snowflake routes extract through ai_complete).") }}{%- endif -%}
+    {%- set _max_out = var('ce_max_output_tokens', none) -%}
+    ai_complete(
+        model => '{{ model }}',
+        prompt => {{ dbt_context_engineering.ce_render_prompt(prompt, input_column) }}
+        {%- if _max_out is not none %},
+        model_parameters => {'max_tokens': {{ _max_out | int }}}
+        {%- endif %},
+        response_format => {'type': 'json', 'schema': parse_json($${{ output_schema }}$$)}
+    )
 {%- endmacro %}
 
 

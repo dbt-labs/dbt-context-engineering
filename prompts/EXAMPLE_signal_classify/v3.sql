@@ -38,7 +38,7 @@ Segment:
       "description": "Verbatim quote from the segment supporting the label (lineage)."
     }
   },
-  "required": ["signal", "evidence"],
+  "required": ["signal"],
   "additionalProperties": false
 }
 {%- endraw -%}

@@ -2,7 +2,7 @@
 
 {#- Flatten ce_extract's structured output to scalars via ce_field, joined to the source text so
     evidence groundedness can be asserted (assert_extract_grounded_sf). The per-engine result
-    shape (Snowflake VARIANT object — unwrapped from AI_EXTRACT's :response envelope in the wrapper;
+    shape (Snowflake VARIANT object — from AI_COMPLETE response_format;
     Databricks JSON string; BigQuery STRUCT) is read uniformly by ce_field. LIVE-VALIDATION DEFERRED. -#}
 select
     e.utterance_id,

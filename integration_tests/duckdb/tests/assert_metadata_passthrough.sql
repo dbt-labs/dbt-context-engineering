@@ -2,10 +2,10 @@
 -- chunk, must match the source document, and must NOT be injected into chunk_text.
 -- Returns rows only on failure.
 with chunks as (
-    select * from {{ ref('ce_chunk_metadata_cols') }}
+    select * from {{ ref('chunk_metadata_cols') }}
 ),
 docs as (
-    select * from {{ ref('ce_fixture_documents') }}
+    select * from {{ ref('fixture_documents') }}
 )
 select 'missing_metadata' as issue, chunk_id
 from chunks

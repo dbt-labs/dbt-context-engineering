@@ -34,25 +34,25 @@ these checks are deterministic, they can run on every change, credential-free.
 
 Three checks, each a normal dbt test:
 
-- **`ce_grounded`** — a generic (schema.yml) test: the evidence quote must appear in its source-text
+- **`grounded`** — a generic (schema.yml) test: the evidence quote must appear in its source-text
   column (case/whitespace normalization on by default, so trivial formatting differences don't
   false-fail). A hallucinated quote → a failing row → a red build.
   ```yaml
   columns:
     - name: evidence
       tests:
-        - dbt_context_engineering.ce_grounded: { source_text_column: segment_text }
+        - dbt_context_engineering.grounded: { source_text_column: segment_text }
   ```
-- **`ce_conforms_to_schema`** — a singular-test macro: a classify/extract column may only hold values
-  from the `ce_schema` enum. It's a **macro used in a singular test, not a generic test**, because
+- **`conforms_to_schema`** — a singular-test macro: a classify/extract column may only hold values
+  from the `schema` enum. It's a **macro used in a singular test, not a generic test**, because
   resolving a versioned schema by name needs the dynamic namespace subscript that dbt's generic-test
   capture render can't do (see [ADR-0001](0001-prompts-and-schemas-as-versioned-macros.md)).
-- **`ce_eval`** — scores predictions against a golden/expected column into tidy `metric, label,
+- **`eval`** — scores predictions against a golden/expected column into tidy `metric, label,
   value` rows (accuracy + per-label precision/recall). Threshold a metric with a test to **gate** a
   prompt/model change: if accuracy drops below the bar, the build fails.
   ```sql
   -- 8-row golden set with 6 correct → accuracy 0.75
-  {{ dbt_context_engineering.ce_eval(ref('predictions'), 'predicted_label', 'expected_label') }}
+  {{ dbt_context_engineering.eval(ref('predictions'), 'predicted_label', 'expected_label') }}
   ```
 
 ## Reasoning
@@ -90,8 +90,8 @@ the next person doesn't "tidy" it back into a generic test and silently break it
   into an **enforced invariant**. Combine it with extract to get citations you can trust.
 - All three run credential-free and deterministically, so they gate every PR, the "is it correct?"
   question is answered continuously, not once by hand.
-- The only per-engine divergence is the containment / whitespace primitives (`ce_contains`,
-  `ce_collapse_ws`), isolated behind dispatch.
+- The only per-engine divergence is the containment / whitespace primitives (`contains`,
+  `collapse_ws`), isolated behind dispatch.
 - Validated in both directions — passes on good data **and** catches deliberately planted bad data
   (a hallucinated quote, an invented label, a wrong metric).
 
@@ -117,7 +117,7 @@ the next person doesn't "tidy" it back into a generic test and silently break it
 - **Recall (per label)** — of the rows that truly *were* label X, the fraction the model caught.
   High recall = "it rarely misses an X." *Example: 5 rows are truly `objection`, it found 3 → recall
   = 0.6.* Precision and recall trade off, tuning to catch more X's usually admits more false X's —
-  so `ce_eval` reports both and you decide which matters for your use case.
+  so `eval` reports both and you decide which matters for your use case.
 - **Generic vs. singular test** — a reusable YAML-attached dbt test vs. a one-off SQL test. Grounding
   ships as a generic test; conformance ships as a singular-test macro (it needs to resolve a schema
   by name — see [ADR-0001](0001-prompts-and-schemas-as-versioned-macros.md)).

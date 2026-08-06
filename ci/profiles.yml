@@ -16,7 +16,7 @@ jaffle-mcp-demo:            # integration_tests/snowflake
       role: placeholder
       database: placeholder
       warehouse: placeholder
-      schema: ce_ci
+      schema: ci
       threads: 1
 
 bigquery:                   # integration_tests/bigquery
@@ -26,7 +26,7 @@ bigquery:                   # integration_tests/bigquery
       type: bigquery
       method: service-account
       project: placeholder
-      dataset: ce_ci
+      dataset: ci
       keyfile: /dev/null
       threads: 1
 
@@ -38,5 +38,5 @@ databricks:                 # integration_tests/databricks
       host: placeholder
       http_path: placeholder
       token: placeholder
-      schema: ce_ci
+      schema: ci
       threads: 1

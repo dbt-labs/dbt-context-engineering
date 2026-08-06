@@ -49,26 +49,26 @@ jobs:
           mkdir -p target
           dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb
       - name: circuit breaker trips over ceiling (expect FAILURE)
-        # ce_guard_batch must RAISE when a batch exceeds the ceiling. Rebuild the guarded model with
+        # guard_batch must RAISE when a batch exceeds the ceiling. Rebuild the guarded model with
         # a ceiling below the 10-row fixture and assert dbt exits non-zero. Inverts the exit code so
         # a guard that FAILS to trip fails the job.
         run: |
           if dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
-               --select ce_guard_pass --vars '{ce_max_batch_rows: 3}'; then
-            echo "::error::ce_guard_batch did NOT trip over the ceiling"; exit 1
+               --select guard_pass --vars '{max_batch_rows: 3}'; then
+            echo "::error::guard_batch did NOT trip over the ceiling"; exit 1
           else
-            echo "ce_guard_batch tripped as expected (non-zero exit)"
+            echo "guard_batch tripped as expected (non-zero exit)"
           fi
       - name: version guard sequence — delta + version bump (duckdb)
-        # ce_version_guard only shows its behavior across SEQUENTIAL runs. The main build above
-        # already built ce_versioned at v1 (full-refresh). Run 2 keeps v1 -> the delta filter runs
+        # version_guard only shows its behavior across SEQUENTIAL runs. The main build above
+        # already built versioned at v1 (full-refresh). Run 2 keeps v1 -> the delta filter runs
         # (no new rows); run 3 bumps to v2 -> the guard reprocesses ALL rows and the unique_key merge
-        # replaces them. assert_versioned (parameterized by ce_test_version) proves each state.
+        # replaces them. assert_versioned (parameterized by test_version) proves each state.
         run: |
           dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
-            --select ce_versioned assert_versioned --vars '{ce_test_version: v1}'
+            --select versioned assert_versioned --vars '{test_version: v1}'
           dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
-            --select ce_versioned assert_versioned --vars '{ce_test_version: v2}'
+            --select versioned assert_versioned --vars '{test_version: v2}'
 
   # Live battery — OPT-IN (manual `workflow_dispatch` only; never runs on PR/push). Runs the full
   # integration battery against real warehouses for all three adapters. Requires a repo secret
@@ -97,11 +97,11 @@ jobs:
       - name: build battery (full-refresh)
         run: dbt build --project-dir integration_tests/${{ matrix.adapter }} --full-refresh
       - name: version guard sequence — delta + version bump (real warehouse)
-        # Sequential runs to exercise ce_version_guard's delta vs. reprocess-all paths on the real
+        # Sequential runs to exercise version_guard's delta vs. reprocess-all paths on the real
         # warehouse (the full-refresh build above only covers the first build). v1 again = delta;
         # v2 = version bump = reprocess all. Selected by tag so it works across adapters.
         run: |
           dbt build --project-dir integration_tests/${{ matrix.adapter }} \
-            --select tag:version_guard --vars '{ce_test_version: v1}'
+            --select tag:version_guard --vars '{test_version: v1}'
           dbt build --project-dir integration_tests/${{ matrix.adapter }} \
-            --select tag:version_guard --vars '{ce_test_version: v2}'
+            --select tag:version_guard --vars '{test_version: v2}'

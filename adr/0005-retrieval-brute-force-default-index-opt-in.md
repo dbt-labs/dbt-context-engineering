@@ -29,17 +29,17 @@ also have an answer for scale. Those pull in opposite directions if you pick onl
 
 ## Decision
 
-- `ce_vector_search` **defaults to brute-force cosine similarity over an embedding *column***, with no index required. The embedding is an ordinary column produced by `ce_embed`, so it inherits the
+- `vector_search` **defaults to brute-force cosine similarity over an embedding *column***, with no index required. The embedding is an ordinary column produced by `embed`, so it inherits the
 table's governance, tests, and lineage. Most engines expose a scalar similarity
 (`vector_cosine_similarity`); BigQuery diverges to a `VECTOR_SEARCH` table function with
 `use_brute_force`, hidden behind the same macro.
-- `ce_create_vector_index` **builds a managed index, but it is opt-in,** `dbt run-operation` **ONLY, never a model.** It logs the idle-serving-cost warning, and on Databricks (whose index is created
+- `create_vector_index` **builds a managed index, but it is opt-in,** `dbt run-operation` **ONLY, never a model.** It logs the idle-serving-cost warning, and on Databricks (whose index is created
 via API/SDK, not SQL DDL) it raises with guidance rather than emitting fake SQL.
 
 ```sql
-{{ dbt_context_engineering.ce_vector_search(
+{{ dbt_context_engineering.vector_search(
      relation=ref('doc_embeddings'), embedding_column='embedding',
-     query_embedding=dbt_context_engineering.ce_embed('renewal risk'),
+     query_embedding=dbt_context_engineering.embed('renewal risk'),
      top_k=5, id_column='doc_id') }}
 -- → doc_id, score (cosine), ranked desc, top 5 — over a plain table, no index
 ```
@@ -63,7 +63,7 @@ retrieval stay governed for as long as possible before a user chooses otherwise.
 - Scaling to a managed index is a deliberate choice the user opts into via `run-operation` and must
 tear down themselves; nothing bills silently after a normal build.
 - Brute-force ranking is validated deterministically (a known query returns the known-closest rows in
-order); `ce_create_vector_index` is never exercised by tests because it creates billed objects.
+order); `create_vector_index` is never exercised by tests because it creates billed objects.
 - The `filter` argument (e.g. `filter="account_key = 'acme'"`) restricts the candidate set before
 ranking — the mechanism the knowledge base uses for per-account scoping
 ([ADR-0006](0006-knowledge-base-union-to-common-shape.md)).

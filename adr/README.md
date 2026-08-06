@@ -22,7 +22,7 @@ just record the choice.
 | [0005](0005-retrieval-brute-force-default-index-opt-in.md) | Retrieval: brute-force default, managed index opt-in | Accepted |
 | [0006](0006-knowledge-base-union-to-common-shape.md) | Knowledge base: union sources into a common shape | Accepted |
 | [0007](0007-context-evaluation-and-groundedness.md) | Context evaluation & groundedness as deterministic tests | Accepted |
-| [0008](0008-normalizing-ai-output.md) | Normalizing AI output: scalar classify + `ce_text`/`ce_field` | Accepted |
+| [0008](0008-normalizing-ai-output.md) | Normalizing AI output: scalar classify + `text`/`field` | Accepted |
 | [0009](0009-portable-enum-enforcement-via-prompt-injection.md) | Portable enum enforcement via prompt injection | Accepted |
 | [0010](0010-four-ai-operations.md) | Four AI operations: generate, classify, extract, embed | Accepted |
 | [0011](0011-lineage-and-citations-as-a-first-class-invariant.md) | Lineage and citations as a first-class invariant | Accepted |

@@ -2,7 +2,7 @@
 -- its chunk also appears in the previous chunk. Returns rows only on mismatch.
 with produced as (
     select chunk_id, array_to_string(list_sort(source_rows), ',') as rows_csv
-    from {{ ref('ce_chunk_overlap') }}
+    from {{ ref('chunk_overlap') }}
 ),
 expected(chunk_id, rows_csv) as (
     values

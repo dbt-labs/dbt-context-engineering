@@ -1,10 +1,10 @@
--- ce_knowledge_base must unify both sources into the common shape with lineage intact:
+-- knowledge_base must unify both sources into the common shape with lineage intact:
 -- 4 rows, 2 source_types, no null lineage/text/embedding. citation_url is source-configured
--- optional (see ce_kb.sql) — tickets supply it, calls omit it — so this checks BOTH branches:
+-- optional (see kb.sql) — tickets supply it, calls omit it — so this checks BOTH branches:
 -- present-key rows must be non-null, omitted-key rows must be exactly null (not empty string,
 -- not some other placeholder). Returns rows only on failure.
 with kb as (
-    select * from {{ ref('ce_kb') }}
+    select * from {{ ref('kb') }}
 )
 select 'bad_count' as issue
 from kb having count(*) <> 4

@@ -24,7 +24,7 @@ a conformed, retrieval-ready mart. Every source is normalized to the same six co
 | `embedding` | its vector |
 | `ts` | when it happened |
 
-Because everything lands in this shape, one `ce_vector_search(..., filter="account_key = 'acme'")`
+Because everything lands in this shape, one `vector_search(..., filter="account_key = 'acme'")`
 answers a cross-system question, and every hit still carries `source_type` + `source_id` so the
 answer can **cite which system and row** it came from.
 
@@ -36,13 +36,13 @@ rewrite of the retrieval query.
 
 ## Decision
 
-**`ce_knowledge_base(sources)`** unions many pre-embedded source relations into one mart in the
+**`knowledge_base(sources)`** unions many pre-embedded source relations into one mart in the
 common shape. `sources` is a list of dicts, each mapping one source's columns onto the shape;
 **registering a new source is adding one dict.** It is pure portable SQL — a `UNION ALL` with casts,
 no per-engine dispatch.
 
 ```sql
-{{ dbt_context_engineering.ce_knowledge_base([
+{{ dbt_context_engineering.knowledge_base([
   {'relation': ref('stg_tickets'), 'source_type': 'ticket',
    'source_id': 'ticket_id', 'account_key': 'account_id',
    'text': 'body', 'embedding': 'embedding', 'timestamp': 'created_at'},
@@ -56,9 +56,9 @@ no per-engine dispatch.
 Then retrieval is the ordinary macro with a filter:
 
 ```sql
-{{ dbt_context_engineering.ce_vector_search(
+{{ dbt_context_engineering.vector_search(
      relation=ref('knowledge_base'), embedding_column='embedding',
-     query_embedding=dbt_context_engineering.ce_embed('renewal risk'),
+     query_embedding=dbt_context_engineering.embed('renewal risk'),
      id_column='source_id', select_columns=['source_type'],
      filter="account_key = 'acme'") }}
 ```

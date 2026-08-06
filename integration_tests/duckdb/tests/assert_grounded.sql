@@ -1,6 +1,6 @@
--- Proves the ce_grounded machinery both PASSES grounded quotes and CATCHES hallucinated ones,
+-- Proves the grounded machinery both PASSES grounded quotes and CATCHES hallucinated ones,
 -- and that normalization (case-fold + whitespace-collapse) works. Each case declares its expected
--- outcome; the row is flagged grounded via the same public helpers ce_grounded uses. Returns rows
+-- outcome; the row is flagged grounded via the same public helpers grounded uses. Returns rows
 -- only on failure (grounded verdict != expected, or a null verdict).
 with cases as (
     select * from (values
@@ -14,9 +14,9 @@ evaluated as (
     select
         id,
         should_ground,
-        {{ dbt_context_engineering.ce_contains(
-            dbt_context_engineering.ce_norm_text('src', true, true),
-            dbt_context_engineering.ce_norm_text('ev',  true, true)) }} as grounded
+        {{ dbt_context_engineering.contains(
+            dbt_context_engineering.norm_text('src', true, true),
+            dbt_context_engineering.norm_text('ev',  true, true)) }} as grounded
     from cases
 )
 select id, should_ground, grounded

@@ -25,18 +25,18 @@ Two kinds of source-level field show up in this work:
   `recording_url`, that lets an AI consumer cite where an answer came from, not just identify the
   row it came from.
 
-They surface in two places with different needs. `ce_attach_metadata` is a general-purpose transform
-that any source can call with any set of columns. `ce_knowledge_base` is a serving contract that
+They surface in two places with different needs. `attach_metadata` is a general-purpose transform
+that any source can call with any set of columns. `knowledge_base` is a serving contract that
 merges many pre-embedded sources into one mart with a fixed common shape (`source_type`,
 `source_id`, `account_key`, `text`, `embedding`, `ts`, `citation_url`), which a single
-`ce_vector_search` reads across all of them.
+`vector_search` reads across all of them.
 
 It would be natural to teach both layers the frontmatter-versus-provenance distinction. Only one of
 them actually needs it.
 
 ## Decision
 
-**`ce_attach_metadata` treats every field the same; `ce_knowledge_base` promotes `citation_url` to a
+**`attach_metadata` treats every field the same; `knowledge_base` promotes `citation_url` to a
 first-class column on purpose.** In the transform, `metadata_columns` is just a list of names. The
 macro does not know or care whether a column is frontmatter or provenance, and no field gets special
 handling. The caller decides what to pass. In the serving mart, `citation_url` is a named slot in
@@ -45,10 +45,10 @@ resolvable citation is part of what the mart promises its consumers.
 
 ```sql
 -- transform: flat, every column equal
-{{ ce_attach_metadata(..., metadata_columns=['title', 'citation_url', 'assignee']) }}
+{{ attach_metadata(..., metadata_columns=['title', 'citation_url', 'assignee']) }}
 
 -- serving contract: citation_url is a named, guaranteed slot (NULL when a source omits it)
-{{ ce_knowledge_base([
+{{ knowledge_base([
      {'relation': ref('stg_tickets'), 'source_type': 'ticket', 'source_id': 'ticket_id',
       'account_key': 'account_id', 'text': 'body', 'embedding': 'embedding',
       'timestamp': 'created_at', 'citation_url': 'ticket_url'},
@@ -57,7 +57,7 @@ resolvable citation is part of what the mart promises its consumers.
 
 ## Reasoning
 
-**Why the transform stays flat.** `ce_attach_metadata` cannot know what fields a future source will
+**Why the transform stays flat.** `attach_metadata` cannot know what fields a future source will
 carry. If it hardcoded a frontmatter-versus-provenance taxonomy, every new source with a field that
 fits neither category would either be misfiled or force a change to the macro. Treating all columns
 as an opaque list means the macro never has to be taught a taxonomy, and never misapplies one.
@@ -85,12 +85,12 @@ its reuse and buys nothing, since the transform never needs to act on the distin
 ## Glossary
 
 - **Transform layer**: a general-purpose macro that reshapes data for any caller, here
-  `ce_attach_metadata`. Optimized for reuse, so it avoids assumptions about its inputs.
+  `attach_metadata`. Optimized for reuse, so it avoids assumptions about its inputs.
 - **Serving contract (mart)**: a model that promises a fixed column shape to its consumers, here
-  `ce_knowledge_base`. Optimized for guarantees, so it privileges the fields consumers depend on.
+  `knowledge_base`. Optimized for guarantees, so it privileges the fields consumers depend on.
 - **Frontmatter**: relational attributes of a source (customer, participants, assignee).
 - **Provenance**: a resolvable link back to the source object that lets a consumer cite it.
 - **`citation_url`**: the provenance field promoted to a first-class, `NULL`-defaulting column in
   the knowledge base's common shape.
 - **Embedding**: a numeric vector representing the meaning of a piece of text, produced upstream by
-  `ce_embed` and carried through the mart so results can be searched by similarity.
+  `embed` and carried through the mart so results can be searched by similarity.

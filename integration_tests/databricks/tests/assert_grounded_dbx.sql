@@ -1,4 +1,4 @@
--- DETERMINISTIC validation of ce_contains + ce_norm_text + ce_collapse_ws EXECUTION on this
+-- DETERMINISTIC validation of contains + norm_text + collapse_ws EXECUTION on this
 -- warehouse (both grounded and hallucinated directions, plus ignore_case + whitespace-collapse).
 -- Portable inline fixture (union all, not VALUES, for BigQuery). Fail rows only.
 with cases as (
@@ -11,9 +11,9 @@ evaluated as (
     select
         id,
         should_ground,
-        {{ dbt_context_engineering.ce_contains(
-            dbt_context_engineering.ce_norm_text('src', true, true),
-            dbt_context_engineering.ce_norm_text('ev',  true, true)) }} as grounded
+        {{ dbt_context_engineering.contains(
+            dbt_context_engineering.norm_text('src', true, true),
+            dbt_context_engineering.norm_text('ev',  true, true)) }} as grounded
     from cases
 )
 select id, should_ground, grounded

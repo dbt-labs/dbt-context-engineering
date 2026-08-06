@@ -1,5 +1,5 @@
--- Proves ce_conforms_to_schema resolves the enum from ce_schema and CATCHES an out-of-taxonomy
--- label while passing valid ones. Uses the same public ce_schema_enum the macro uses. Returns
+-- Proves conforms_to_schema resolves the enum from schema and CATCHES an out-of-taxonomy
+-- label while passing valid ones. Uses the same public schema_enum the macro uses. Returns
 -- rows only on failure (conformance verdict != expected).
 with cases as (
     select * from (values
@@ -13,8 +13,8 @@ evaluated as (
         id,
         should_pass,
         label in (
-            {%- for v in dbt_context_engineering.ce_schema_enum(
-                    dbt_context_engineering.ce_schema('EXAMPLE_signal_classify', 'v3')) -%}
+            {%- for v in dbt_context_engineering.schema_enum(
+                    dbt_context_engineering.schema_def('EXAMPLE_signal_classify', 'v3')) -%}
             '{{ v }}'{% if not loop.last %}, {% endif %}
             {%- endfor -%}
         ) as conforms

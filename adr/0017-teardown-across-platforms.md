@@ -37,16 +37,16 @@ Two ways to know what to drop:
 
 ## Decision
 
-**We will provide a graph-driven `ce_teardown` on every integration tier, scoped to the current
+**We will provide a graph-driven `teardown` on every integration tier, scoped to the current
 target and defaulting to a dry run.** Each cloud project (Snowflake, Databricks, BigQuery) has a
-`ce_teardown` run-operation; duckdb resets by deleting its local database file.
+`teardown` run-operation; duckdb resets by deleting its local database file.
 
 ```bash
 # preview (default): logs what it would drop, drops nothing
-dbt run-operation ce_teardown --project-dir integration_tests/snowflake
+dbt run-operation teardown --project-dir integration_tests/snowflake
 
 # execute
-dbt run-operation ce_teardown --project-dir integration_tests/snowflake --args "{'dry_run': false}"
+dbt run-operation teardown --project-dir integration_tests/snowflake --args "{'dry_run': false}"
 ```
 
 The cloud macro walks `graph.nodes` rather than a hand-maintained list. It drops a node only when

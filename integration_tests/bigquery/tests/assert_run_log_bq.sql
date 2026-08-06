@@ -1,20 +1,20 @@
--- ce_log_ai_run must append exactly one correct row per run (see ADR-0019). ce_ai_run_log is
+-- log_ai_run must append exactly one correct row per run (see ADR-0019). ai_run_log is
 -- append-only and grows across dbt builds, so this scopes to THIS invocation via invocation_id
 -- rather than a table-wide count (which fails on any second build). For this run it asserts exactly
--- one classify row, valid and sized from the seed using the same ce_estimate_tokens / price the
+-- one classify row, valid and sized from the seed using the same estimate_tokens / price the
 -- logger uses. Rows only on failure; expected values are computed, not magic numbers. The post-hook
 -- side effect is invisible to the DAG, so depend on the logging model to run after it:
--- depends_on: {{ ref('ce_signals_bq') }}
-{% set price = var('ce_cost_per_1k_tokens', none) %}
+-- depends_on: {{ ref('signals_bq') }}
+{% set price = var('cost_per_1k_tokens', none) %}
 with log as (
-    select * from {{ ref('ce_ai_run_log') }}
+    select * from {{ ref('ai_run_log') }}
     where invocation_id = '{{ invocation_id }}' and function_name = 'classify'
 ),
 expected as (
     select
-        (select count(*) from {{ ref('ce_fixture_utterances') }}) as exp_row_count,
-        (select coalesce(sum({{ dbt_context_engineering.ce_estimate_tokens('utterance_text') }}), 0)
-         from {{ ref('ce_fixture_utterances') }}) as exp_est_tokens
+        (select count(*) from {{ ref('fixture_utterances') }}) as exp_row_count,
+        (select coalesce(sum({{ dbt_context_engineering.estimate_tokens('utterance_text') }}), 0)
+         from {{ ref('fixture_utterances') }}) as exp_est_tokens
 ),
 bad_count as (
     select 'bad_count' as issue

@@ -51,7 +51,7 @@ chunk came from, so a retrieval hit can cite its origin).
 
 Chunking is **one operation: pack ordered, atomic *units* into token-bounded chunks** that never
 split a unit and never cross a partition key. A "unit" is one input row like a turn, or a sentence
-produced by the layer-1 splitter `ce_split_sentences`. The mechanism is pure window SQL, identical
+produced by the layer-1 splitter `split_sentences`. The mechanism is pure window SQL, identical
 on every engine:
 
 1. estimate tokens per unit: `ceil(char_length / 4)` — no model call;
@@ -63,7 +63,7 @@ chunks never span two calls. Optional overlap re-includes the boundary units of 
 so context isn't lost at the seams.
 
 ```sql
-{{ dbt_context_engineering.ce_chunk(
+{{ dbt_context_engineering.chunk(
      relation=ref('utterances'), id_column='utterance_id',
      order_column='turn_index', text_column='text',
      partition_column='call_id', target_tokens=512) }}
@@ -103,13 +103,13 @@ not bolted on.
 
 ## Consequences
 
-- One portable macro (`ce_chunk`) covers both transcripts and documents; the only per-engine
-  divergence is ordered array/string aggregation, isolated in `ce_array_agg` / `ce_string_agg`.
+- One portable macro (`chunk`) covers both transcripts and documents; the only per-engine
+  divergence is ordered array/string aggregation, isolated in `array_agg` / `string_agg`.
 - `source_rows` lineage is non-negotiable and flows all the way into retrieval results downstream.
 - The token estimate is a heuristic (`chars/4`), not a real tokenizer, done deliberately, to stay
   zero-cost and portable; it is close enough for budgeting.
 - Sentence splitting is intentionally naive (`[.!?]`) and will over-split abbreviations; prose that
-  needs better boundaries should be split upstream with a real tokenizer and fed to `ce_chunk` as
+  needs better boundaries should be split upstream with a real tokenizer and fed to `chunk` as
   units.
 - Fully deterministic, so it is the best-validated layer in the deterministic test suite
   (boundaries, the soft cap, lineage, and overlap are all asserted).

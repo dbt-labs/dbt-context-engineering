@@ -35,7 +35,7 @@ maintaining a second copy of the label list by hand (which would inevitably drif
 ## Decision
 
 **Keep the allowed values in one place, the schema `enum`, and inject them into the prompt on the
-engines whose structured output can't carry them.** `ce_augment_prompt(prompt, output_schema)`
+engines whose structured output can't carry them.** `augment_prompt(prompt, output_schema)`
 prepends an explicit constraint block for each enum field, generated from the schema at compile
 time:
 

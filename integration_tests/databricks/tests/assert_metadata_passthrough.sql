@@ -1,8 +1,8 @@
-{#- ce_chunk_metadata_cols_dbx (in_text=False): title/citation_url must be present on every chunk,
+{#- chunk_metadata_cols_dbx (in_text=False): title/citation_url must be present on every chunk,
     equal to the source document's values, and must NOT have leaked into chunk_text. -#}
 {%- set str_t = dbt.type_string() -%}
-with chunks as (select * from {{ ref('ce_chunk_metadata_cols_dbx') }}),
-docs as (select * from {{ ref('ce_fixture_documents') }})
+with chunks as (select * from {{ ref('chunk_metadata_cols_dbx') }}),
+docs as (select * from {{ ref('fixture_documents') }})
 select 'missing_metadata' as issue, chunk_id from chunks
 where title is null or citation_url is null
 union all

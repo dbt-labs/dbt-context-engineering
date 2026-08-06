@@ -18,7 +18,7 @@ should never remove the structured copy the other depends on.
 
 ## Context
 
-`ce_attach_metadata` produces metadata for both readers. Its `in_text` flag controls whether a
+`attach_metadata` produces metadata for both readers. Its `in_text` flag controls whether a
 metadata block is embedded into `chunk_text`. The open question was what `in_text=true` should do to
 the columns.
 

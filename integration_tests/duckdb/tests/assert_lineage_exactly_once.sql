@@ -2,7 +2,7 @@
 -- source_rows, and all 10 seed utterances are covered. Returns rows only on failure.
 with exploded as (
     select unnest(source_rows) as utterance_id
-    from {{ ref('ce_chunk_utterances') }}
+    from {{ ref('chunk_utterances') }}
 ),
 per_utterance as (
     select utterance_id, count(*) as appearances

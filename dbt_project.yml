@@ -27,43 +27,43 @@ clean-targets:
 vars:
   # Default model per function (override per call at the wrapper).
   # Model choice is the single largest cost lever — always explicit, always logged.
-  ce_model_generate: null      # e.g. snowflake: 'claude-3-5-sonnet'; set per adapter/project
-  ce_model_classify: null
-  ce_model_extract: null
+  model_generate: null      # e.g. snowflake: 'claude-3-5-sonnet'; set per adapter/project
+  model_classify: null
+  model_extract: null
 
   # Embeddings — pinned. A corpus embedded by one model cannot be searched by another.
-  ce_embedding_model: null
+  embedding_model: null
 
-  # Chunking (ce_chunk, Phase 1). Token heuristic is ceil(char_length/4); no AI call.
+  # Chunking (chunk, Phase 1). Token heuristic is ceil(char_length/4); no AI call.
   # target = best-practice sweet spot (~512); overlap opt-in (0 = clean partition).
-  ce_chunk_target_tokens: 512
-  ce_chunk_overlap_tokens: 0
+  chunk_target_tokens: 512
+  chunk_overlap_tokens: 0
 
-  # Circuit breaker ceilings (ce_guard_batch, Phase 2). Guards the INPUT relation only.
-  ce_max_batch_rows: 10000
-  ce_max_est_tokens: 5000000
+  # Circuit breaker ceilings (guard_batch, Phase 2). Guards the INPUT relation only.
+  max_batch_rows: 10000
+  max_est_tokens: 5000000
 
   # OUTPUT-side cost control. The guard above only bounds INPUT tokens, so it cannot catch an
   # output blowup. null => vendor default (nothing emitted).
-  #   ce_max_output_tokens — cross-engine response cap. Snowflake AI_COMPLETE `max_tokens`,
-  #     Databricks ai_query `max_tokens`, BigQuery `maxOutputTokens`. Applies to ce_generate on all
+  #   max_output_tokens — cross-engine response cap. Snowflake AI_COMPLETE `max_tokens`,
+  #     Databricks ai_query `max_tokens`, BigQuery `maxOutputTokens`. Applies to generate on all
   #     three; on Snowflake/Databricks classify & extract expose no cap (bounded by output_schema).
-  #   ce_bq_thinking_budget — BigQuery/Gemini ONLY. Gemini 2.5 runs DYNAMIC THINKING ON BY DEFAULT
+  #   bq_thinking_budget — BigQuery/Gemini ONLY. Gemini 2.5 runs DYNAMIC THINKING ON BY DEFAULT
   #     and bills thinking as OUTPUT tokens; set 0 for structured tasks to stop paying for it.
-  ce_max_output_tokens: null      # e.g. 1024
-  ce_bq_thinking_budget: null     # 0 disables Gemini thinking; null => model default
+  max_output_tokens: null      # e.g. 1024
+  bq_thinking_budget: null     # 0 disables Gemini thinking; null => model default
 
-  # Cost logging (ce_log_ai_run, Phase 3). Price per 1k tokens for est_cost; null => est_cost
+  # Cost logging (log_ai_run, Phase 3). Price per 1k tokens for est_cost; null => est_cost
   # left null.
-  ce_cost_per_1k_tokens: null
+  cost_per_1k_tokens: null
 
   # BigQuery ONLY — required. A MODEL over a Vertex AI connection must exist before calls
   # run. This is a setup step, never auto-created inside a model build.
-  ce_bq_connection: null       # e.g. 'us.my_vertex_connection'
-  ce_bq_model: null            # e.g. 'my_dataset.my_remote_model'
+  bq_connection: null       # e.g. 'us.my_vertex_connection'
+  bq_model: null            # e.g. 'my_dataset.my_remote_model'
 
   # Where the append-only AI run log is written (Phase 3).
-  ce_ai_run_log_relation: null
+  ai_run_log_relation: null
 
 models:
   dbt_context_engineering:

@@ -2,7 +2,7 @@
 -- overlap duplicates boundary units), and all 10 seed utterances are covered. Fail rows only.
 with exploded as (
     select unnest(source_rows) as utterance_id
-    from {{ ref('ce_chunk_overlap') }}
+    from {{ ref('chunk_overlap') }}
 ),
 per_utterance as (
     select utterance_id, count(*) as appearances

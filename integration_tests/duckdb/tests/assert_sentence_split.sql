@@ -1,8 +1,8 @@
--- Exact ce_split_sentences output over the document seed. Returns rows only on mismatch:
+-- Exact split_sentences output over the document seed. Returns rows only on mismatch:
 -- validates sentence count, 1-based contiguous index, and verbatim text per document.
 with produced as (
     select document_id, sentence_index, sentence_text
-    from {{ ref('ce_split_docs') }}
+    from {{ ref('split_docs') }}
 ),
 expected(document_id, sentence_index, sentence_text) as (
     values

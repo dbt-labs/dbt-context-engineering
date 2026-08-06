@@ -1,7 +1,7 @@
--- ce_eval must compute the known golden-set metrics exactly on this warehouse. Seed has 8 rows,
+-- eval must compute the known golden-set metrics exactly on this warehouse. Seed has 8 rows,
 -- 6 correct => accuracy 0.75; 'objection' precision 1/1 = 1.0, recall 1/2 = 0.5. Fail rows only.
 with m as (
-    select * from {{ ref('ce_eval_metrics_dbx') }}
+    select * from {{ ref('eval_metrics_dbx') }}
 )
 select 'bad_accuracy' as issue
 from m where metric = 'accuracy' and label = '__overall__' and value <> 0.75

@@ -14,7 +14,7 @@ new column in a table that dbt materializes like any other model.
 ```sql
 select
   id,
-  {{ dbt_context_engineering.ce_generate('body', p) }} as summary   -- a model call, as a column
+  {{ dbt_context_engineering.generate('body', p) }} as summary   -- a model call, as a column
 from {{ ref('docs') }}
 ```
 
@@ -37,15 +37,15 @@ pattern possible: keep the model call *inside* SQL.
 
 ## Decision
 
-Every enrichment is a **row-level SQL expression**. `ce_render_prompt` turns a resolved prompt plus
+Every enrichment is a **row-level SQL expression**. `render_prompt` turns a resolved prompt plus
 an input column into a portable concatenation; the wrappers wrap that in the engine's native AI
 function; the result is a column. AI models are therefore *ordinary dbt models*, incremental,
 tested, and decorated with the cost guard and run-log hooks, not scripts living beside the project.
 
 ```sql
 {{ config(materialized='incremental', unique_key='id',
-          pre_hook="{{ dbt_context_engineering.ce_guard_batch(ref('docs'), 'body') }}") }}
-select id, {{ dbt_context_engineering.ce_classify('body', p, s) }} as signal
+          pre_hook="{{ dbt_context_engineering.guard_batch(ref('docs'), 'body') }}") }}
+select id, {{ dbt_context_engineering.classify('body', p, s) }} as signal
 from {{ ref('docs') }}
 ```
 

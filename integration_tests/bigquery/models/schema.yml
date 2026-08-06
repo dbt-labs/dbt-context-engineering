@@ -1,8 +1,8 @@
 version: 2
 
 models:
-  - name: ce_chunk_metadata_cols_bq
-    description: "ce_attach_metadata over ce_chunk_docs_bq (default in_text=False) — title/citation_url pass through as columns only."
+  - name: chunk_metadata_cols_bq
+    description: "attach_metadata over chunk_docs_bq (default in_text=False) — title/citation_url pass through as columns only."
     columns:
       - name: chunk_id
         tests: [unique, not_null]
@@ -11,8 +11,8 @@ models:
       - name: citation_url
         tests: [not_null]
 
-  - name: ce_chunk_metadata_text_bq
-    description: "ce_attach_metadata over ce_chunk_docs_bq with in_text=True — same columns, plus the block prepended to chunk_text."
+  - name: chunk_metadata_text_bq
+    description: "attach_metadata over chunk_docs_bq with in_text=True — same columns, plus the block prepended to chunk_text."
     columns:
       - name: chunk_id
         tests: [unique, not_null]
@@ -21,8 +21,8 @@ models:
       - name: citation_url
         tests: [not_null]
 
-  - name: ce_chunk_metadata_utterances_bq
-    description: "ce_attach_metadata over ce_chunk_utterances_bq (transcripts), same macro and call shape as the docs models, pointed at a structurally different source."
+  - name: chunk_metadata_utterances_bq
+    description: "attach_metadata over chunk_utterances_bq (transcripts), same macro and call shape as the docs models, pointed at a structurally different source."
     columns:
       - name: chunk_id
         tests: [unique, not_null]

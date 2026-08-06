@@ -39,7 +39,7 @@ dispatching to the right native function.
 
 ## Decision
 
-Ship exactly four wrappers — `ce_generate`, `ce_classify`, `ce_extract`, `ce_embed` — each a
+Ship exactly four wrappers — `generate`, `classify`, `extract`, `embed` — each a
 row-level call (see [ADR-0012](0012-ai-as-a-row-level-sql-function.md)) that returns a value you drop
 into a `SELECT`. Each maps to the engine's native function:
 
@@ -55,8 +55,8 @@ is optional; `embed` takes no prompt, only a pinned model.
 
 ```sql
 select
-  {{ dbt_context_engineering.ce_classify('segment', p, s) }}  as signal,   -- one label
-  {{ dbt_context_engineering.ce_embed('segment') }}           as embedding  -- a vector
+  {{ dbt_context_engineering.classify('segment', p, s) }}  as signal,   -- one label
+  {{ dbt_context_engineering.embed('segment') }}           as embedding  -- a vector
 from {{ ref('segments') }}
 ```
 

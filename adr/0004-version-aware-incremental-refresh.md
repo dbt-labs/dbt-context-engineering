@@ -28,7 +28,7 @@ reading the stored version **from the table at run time**. A full custom materia
 ## Decision
 
 Ship a **runtime-boolean macro** instead of a materialization:
-`ce_version_guard(pinned_version, version_column='model_version')`. It returns `**True`
+`version_guard(pinned_version, version_column='model_version')`. It returns `**True`
 (reprocess everything)** on first build, on `--full-refresh`, or when the version stored in the
 table differs from the pinned one; otherwise `**False`** (process just the delta). The model uses
 it to switch its own incremental `WHERE`, and stamps the pinned version on every row so the next
@@ -38,10 +38,10 @@ run can compare.
 {{ config(materialized='incremental', unique_key='doc_id') }}
 select
     doc_id,
-    '{{ var("ce_embedding_model") }}' as model_version,           -- stamp the version
-    {{ dbt_context_engineering.ce_embed('body') }} as embedding
+    '{{ var("embedding_model") }}' as model_version,           -- stamp the version
+    {{ dbt_context_engineering.embed('body') }} as embedding
 from {{ ref('docs') }}
-{% if not dbt_context_engineering.ce_version_guard(var('ce_embedding_model')) %}
+{% if not dbt_context_engineering.version_guard(var('embedding_model')) %}
 where doc_id not in (select doc_id from {{ this }})               -- delta only …
 {% endif %}                                                       -- … skipped on a version bump
 ```

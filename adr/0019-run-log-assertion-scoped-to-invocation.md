@@ -6,7 +6,7 @@ Accepted, 2026-07-31.
 
 ## Concept
 
-An **append-only log cannot be checked by counting the whole table**. `ce_ai_run_log` is designed to
+An **append-only log cannot be checked by counting the whole table**. `ai_run_log` is designed to
 accumulate one row per AI model run and to persist across dbt invocations. So a test that asserts a
 table-wide count is really trying to assert a **per-run** property, that *this* run logged the right
 row, using the wrong unit. The correct unit is the **invocation**, not the table.
@@ -33,12 +33,12 @@ classify row per invocation.
 
 **All four `assert_run_log` tests scope to the current `invocation_id` and assert the same per-run
 contract: exactly one `classify` row for this invocation, valid and sized from the seed using the
-*same* `ce_estimate_tokens` and price the logger uses.** Expected values are computed from the
+*same* `estimate_tokens` and price the logger uses.** Expected values are computed from the
 fixture, never magic numbers.
 
 ```sql
 with log as (
-    select * from {{ ref('ce_ai_run_log') }}
+    select * from {{ ref('ai_run_log') }}
     where invocation_id = '{{ invocation_id }}' and function_name = 'classify'
 )
 -- then: exactly one row, valid and correctly sized
@@ -74,11 +74,11 @@ table-wide fragility.
 
 ## Glossary
 
-- **`ce_ai_run_log`**: the append-only usage/cost log; one row is appended per AI model run by the
-  `ce_log_ai_run` post-hook, persisting across dbt invocations.
+- **`ai_run_log`**: the append-only usage/cost log; one row is appended per AI model run by the
+  `log_ai_run` post-hook, persisting across dbt invocations.
 - **`invocation_id`**: dbt's unique id for a single `dbt` run, stamped on each logged row and
   available in Jinja as `{{ invocation_id }}`; the grain this assertion scopes to.
 - **Post-hook**: SQL dbt runs after a model builds; here it inserts the run's row into the log, a
   side effect invisible to the DAG, so the test declares an explicit `depends_on`.
-- **`ce_estimate_tokens`**: the per-engine token-estimate expression the logger uses to size a batch;
+- **`estimate_tokens`**: the per-engine token-estimate expression the logger uses to size a batch;
   the test reuses it so expected and logged values match by construction.

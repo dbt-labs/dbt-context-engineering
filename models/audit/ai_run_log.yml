@@ -1,0 +1,22 @@
+version: 2
+models:
+  - name: ai_run_log
+    description: >
+      Append-only log of every AI model run: model name, function, row count, estimated
+      tokens, estimated cost, timestamp, invocation id. Reconciled against engine usage
+      sources in Phase 3. Populated by log_ai_run (post-hook).
+    columns:
+      - name: invocation_id
+        description: dbt invocation id for the run that produced the row.
+      - name: model_name
+        description: The AI model used (the single largest cost lever; always logged).
+      - name: function_name
+        description: Which  function issued the call (generate/classify/extract/embed).
+      - name: row_count
+        description: Rows processed in the batch.
+      - name: est_tokens
+        description: Heuristic token estimate (estimate_tokens).
+      - name: est_cost
+        description: Estimated cost; corrected against actuals by the reconciliation view.
+      - name: run_at
+        description: Run timestamp.

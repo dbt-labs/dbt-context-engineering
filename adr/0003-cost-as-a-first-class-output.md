@@ -42,23 +42,23 @@ or during* the run as a report the next morning is too late.
 
 Three coordinated pieces:
 
-- **`ce_guard_batch`** — a **pre-hook circuit breaker**. Before the model runs, it counts the input
-  rows and estimated input tokens and **raises** if either exceeds `ce_max_batch_rows` /
-  `ce_max_est_tokens`. It was pulled forward to ship alongside the very first AI wrapper, so **no
+- **`guard_batch`** — a **pre-hook circuit breaker**. Before the model runs, it counts the input
+  rows and estimated input tokens and **raises** if either exceeds `max_batch_rows` /
+  `max_est_tokens`. It was pulled forward to ship alongside the very first AI wrapper, so **no
   unguarded AI call ever exists** in the codebase.
-- **`ce_log_ai_run`** — a **post-hook meter**. It appends one row per run (model, function, row
-  count, estimated tokens/cost, timestamp, invocation id) to the append-only `ce_ai_run_log` model.
+- **`log_ai_run`** — a **post-hook meter**. It appends one row per run (model, function, row
+  count, estimated tokens/cost, timestamp, invocation id) to the append-only `ai_run_log` model.
 - **Output-side controls** — because the input guard can't see output blow-ups, we have implemented 
-  `ce_max_output_tokens` (a cross-engine cap on the response) and `ce_bq_thinking_budget`
+  `max_output_tokens` (a cross-engine cap on the response) and `bq_thinking_budget`
   (BigQuery/Gemini only; `0` turns off the default thinking that caused the 65k-token run).
 
 ```sql
 {{ config(
-  pre_hook  = "{{ dbt_context_engineering.ce_guard_batch(ref('stg'), 'text') }}",
-  post_hook = "{{ dbt_context_engineering.ce_log_ai_run('classify',
-                    model_name=var('ce_model_classify'), relation=ref('stg'), input_column='text') }}"
+  pre_hook  = "{{ dbt_context_engineering.guard_batch(ref('stg'), 'text') }}",
+  post_hook = "{{ dbt_context_engineering.log_ai_run('classify',
+                    model_name=var('model_classify'), relation=ref('stg'), input_column='text') }}"
 ) }}
-select id, {{ dbt_context_engineering.ce_classify('text', ...) }} as signal
+select id, {{ dbt_context_engineering.classify('text', ...) }} as signal
 from {{ ref('stg') }}
 -- guard runs first (raises if the batch is too big); log records the run after it succeeds
 ```
@@ -127,5 +127,5 @@ So we shipped the high-value, low-cost half now and left reconciliation as somet
   loudly rather than proceeding. Here: refuse a batch that exceeds a row/token ceiling.
 - **Append-only incremental model** — a table that grows by adding rows on each run rather than
   being rebuilt. The run log is append-only so history accumulates.
-- **`var`** — a dbt variable: a named, overridable setting (e.g. `ce_max_batch_rows`) so limits are
+- **`var`** — a dbt variable: a named, overridable setting (e.g. `max_batch_rows`) so limits are
   configuration, not hard-coded.

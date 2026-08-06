@@ -41,14 +41,14 @@ model. That rules out "resolve it at run time from somewhere else." Three ways t
 ## Decision
 
 Each prompt/schema **version is a Jinja macro** on a macro path:
-`ce_prompt__<name>__<version>()` and `ce_schema__<name>__<version>()`. The resolvers
-`ce_prompt(name, version)` and `ce_schema(name, version)` look the macro up **dynamically by name**
+`prompt__<name>__<version>()` and `schema__<name>__<version>()`. The resolvers
+`prompt(name, version)` and `schema(name, version)` look the macro up **dynamically by name**
 and return its text as a compile-time literal. Versions are explicit and required, there is no
 implicit "latest version".
 
 ```jinja
 -- prompts/signal_classify/v3.sql
-{% macro ce_prompt__signal_classify__v3() %}
+{% macro prompt__signal_classify__v3() %}
 Classify the sales-call segment below into exactly one signal label.
 Segment:
 {{ input }}
@@ -58,9 +58,9 @@ Segment:
 ```sql
 -- models/signals.sql — the version is right there in the call, and in the compiled SQL
 select id,
-  {{ dbt_context_engineering.ce_classify('segment',
-       dbt_context_engineering.ce_prompt('signal_classify','v3'),
-       dbt_context_engineering.ce_schema('signal_classify','v3')) }} as signal
+  {{ dbt_context_engineering.classify('segment',
+       dbt_context_engineering.prompt('signal_classify','v3'),
+       dbt_context_engineering.schema_def('signal_classify','v3')) }} as signal
 from {{ ref('segments') }}
 ```
 

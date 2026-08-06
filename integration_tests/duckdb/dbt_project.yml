@@ -1,11 +1,11 @@
-name: 'ce_duckdb_tests'
+name: 'duckdb_tests'
 version: '1.0.0'
 config-version: 2
 
 # Credential-free deterministic test project (DECISIONS.md D6). duckdb executes the chunking
 # SQL locally so Phase 1 chunking is really validated, not just compiled. Consumes the package
 # above as a local dependency.
-profile: 'ce_duckdb_tests'
+profile: 'duckdb_tests'
 
 model-paths: ["models"]
 seed-paths: ["seeds"]
@@ -14,8 +14,8 @@ target-path: "target"
 clean-targets: ["target", "dbt_packages"]
 
 vars:
-  ce_chunk_target_tokens: 512
-  ce_chunk_overlap_tokens: 0
+  chunk_target_tokens: 512
+  chunk_overlap_tokens: 0
 
 models:
   # The package's own models are disabled here except the audit log, which Phase 3 exercises.

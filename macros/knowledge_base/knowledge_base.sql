@@ -40,19 +40,28 @@
     {%- endif -%}
     {%- set required = ['relation', 'source_type', 'source_id', 'account_key', 'text', 'embedding', 'timestamp'] -%}
     {%- set str_t = dbt.type_string() -%}
+    {%- set ts_t = dbt.type_timestamp() -%}
     {%- for s in sources -%}
+        {#- capture the SOURCE's position before the inner loop shadows loop.index with the key's -#}
+        {%- set source_num = loop.index -%}
         {%- for k in required -%}
             {%- if k not in s -%}
-                {{ exceptions.raise_compiler_error("knowledge_base: source #" ~ loop.index ~ " is missing key '" ~ k ~ "'.") }}
+                {{ exceptions.raise_compiler_error("knowledge_base: source #" ~ source_num ~ " is missing key '" ~ k ~ "'.") }}
             {%- endif -%}
         {%- endfor -%}
 select
     {{ "'" ~ s.source_type ~ "'" }} as source_type,
     cast({{ s.source_id }} as {{ str_t }})    as source_id,
     cast({{ s.account_key }} as {{ str_t }})  as account_key,
-    {{ s.text }}      as text,
+    {#- text and ts are cast to a common type so heterogeneous sources UNION cleanly — a strict engine
+        (BigQuery) rejects a UNION ALL whose Nth columns differ (e.g. one source's timestamp is DATE,
+        another's is TIMESTAMP). embedding is intentionally NOT cast: every source must already carry
+        an embedding from the SAME model (see version_guard), so the column type is homogeneous by
+        that invariant, and casting a VECTOR/ARRAY is itself engine-specific and would not repair a
+        genuine dimension/model mismatch anyway. -#}
+    cast({{ s.text }} as {{ str_t }})         as text,
     {{ s.embedding }} as embedding,
-    {{ s.timestamp }} as ts,
+    cast({{ s.timestamp }} as {{ ts_t }})     as ts,
     {% if 'citation_url' in s -%}
     cast({{ s.citation_url }} as {{ str_t }}) as citation_url
     {%- else -%}

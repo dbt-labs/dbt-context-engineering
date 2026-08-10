@@ -26,6 +26,14 @@
     {%- if not execute -%}
         {{ return(false) }}  {#- parse time: assume the incremental delta path -#}
     {%- endif -%}
+    {#- Adoption path: pointing the package at a PRE-EXISTING incremental table that predates version
+        stamping — the table exists but has no version_column. Reading it would raise an opaque
+        "column does not exist". There is no stored version to trust, so the safe direction is to
+        reprocess everything (this run adds/stamps the column and the unique_key merge replaces rows). -#}
+    {%- set col_names = adapter.get_columns_in_relation(this) | map(attribute='name') | map('lower') | list -%}
+    {%- if version_column | lower not in col_names -%}
+        {{ return(true) }}
+    {%- endif -%}
     {%- set stored = run_query('select distinct ' ~ version_column ~ ' as v from ' ~ this).columns[0].values() -%}
     {%- set mismatched = stored | reject('equalto', pinned_version) | list -%}
     {#- reprocess if the table is empty or holds any version other than the pinned one -#}

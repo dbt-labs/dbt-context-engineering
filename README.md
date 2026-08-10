@@ -221,22 +221,37 @@ The full pattern — process only new rows, re-embed on a version bump, guard co
 {{ config(
     materialized  = 'incremental',
     unique_key    = 'doc_id',
-    pre_hook      = "{{ dbt_context_engineering.guard_batch(ref('stg_docs'), 'body') }}",
-    post_hook     = "{{ dbt_context_engineering.log_ai_run('embed', model_name=var('embedding_model'), relation=this, input_column='body') }}"
+    pre_hook      = "{{ dbt_context_engineering.guard_batch(ref('stg_docs'), 'body',
+                        filter=dbt_context_engineering.incremental_delta_predicate('doc_id', var('embedding_model'))) }}",
+    post_hook     = "{{ dbt_context_engineering.log_ai_run('embed', model_name=var('embedding_model'),
+                        relation=ref('stg_docs'), input_column='body',
+                        filter=dbt_context_engineering.incremental_delta_predicate('doc_id', var('embedding_model'))) }}"
 ) }}
+{% set delta = dbt_context_engineering.incremental_delta_predicate('doc_id', var('embedding_model')) %}
 select
     doc_id,
     '{{ var("embedding_model") }}' as model_version,   -- stamp the pinned version
     {{ dbt_context_engineering.embed('body') }} as embedding
 from {{ ref('stg_docs') }}
-{% if not dbt_context_engineering.version_guard(var('embedding_model')) %}
-where doc_id not in (select doc_id from {{ this }})        -- delta only; skipped on version change
+{% if delta %}where {{ delta }}                            -- delta only; skipped on first build / --full-refresh / version bump
 {% endif %}
 ```
 
 `version_guard` returns True (reprocess all) on first build, `--full-refresh`, or when the
 stored `model_version` differs from the pinned one — so a model/embedding-version bump re-embeds
 the whole corpus, and the `unique_key` merge replaces the old rows. No custom materialization.
+
+**Guard AND log the delta, not the corpus — from one source of truth.** The body's `where`, the
+guard's `filter`, and the log's `filter` must all describe the same batch, or they drift.
+`incremental_delta_predicate('doc_id', var('embedding_model'))` returns that predicate once (or
+`none` when the whole corpus reruns), so all three agree. Without it: the guard counts the full
+source and, once the corpus passes `max_batch_rows`, every incremental run false-trips even for a
+few new rows; and the log records the whole corpus every run, so `row_count`/`est_cost` are wrong
+by orders of magnitude. Note the post-hook meters `relation=ref('stg_docs')`, **not** `this` — the
+token estimate reads `body`, which exists in the source but not in this model's output
+(`doc_id, model_version, embedding`); metering `this` here would error *after* the embed spend.
+`this`, `is_incremental()`, and `version_guard()` all resolve inside pre-/post-hooks — verified on
+duckdb (`guard_delta`, `logged_filtered`, and their CI steps).
 
 ## Retrieval (Phase 5)
 
@@ -357,8 +372,12 @@ dbt_context_engineering.prompt('EXAMPLE_signal_classify', 'v3')
 evidence/quote field so every extracted fact carries its source text.
 
 **`render_prompt(prompt, input_column)`** — turns a resolved prompt into a portable SQL string
-expression, substituting the `{{ input }}` placeholder with the row's input column. Used internally
-by every AI wrapper; call it directly only if you're hand-building a prompt expression.
+expression, substituting the `{{ input }}` placeholder with the row's input column. Placeholder
+matching is whitespace-tolerant (`{{input}}`, `{{ input }}`, `{{  input  }}` all substitute), so a
+stray space never silently sends the literal placeholder to the model. A `none` prompt raises a
+clear error — `generate`/`classify`/`extract` all need a resolved prompt (the input is injected via
+its placeholder). Used internally by every AI wrapper; call it directly only if you're hand-building
+a prompt expression.
 
 **`augment_prompt(prompt, output_schema)`** — prepends an explicit "allowed values" block for
 each `enum` field in the schema. Used by the **BigQuery** wrappers so the model is constrained even
@@ -438,40 +457,55 @@ n_source_rows, token_estimate`.
 
 **`split_sentences(relation, id_column, text_column)`** — splits one text row into one row per
 sentence (`sentence_id, document_id, sentence_index, sentence_text`) to feed `chunk`. Naive
-`[.!?]` boundaries; for better splitting use a real tokenizer upstream.
+`[.!?]` boundaries (break after every terminator run) — **identical rule on all engines**, so a
+corpus splits the same everywhere. For better splitting use a real tokenizer upstream.
 
 ### Cost & audit
 
-**`guard_batch(relation, input_column=none)`** — **pre-hook** circuit breaker: counts rows +
-estimated tokens of the input and **raises before the model runs** if it exceeds `max_batch_rows`
-/ `max_est_tokens`. No AI call ships without one.
+**`guard_batch(relation, input_column=none, filter=none)`** — **pre-hook** circuit breaker: counts
+rows + estimated tokens of the input and **raises before the model runs** if it exceeds
+`max_batch_rows` / `max_est_tokens`. No AI call ships without one. On an incremental model pass
+`filter` (see `incremental_delta_predicate`) so it counts the delta, not the whole corpus.
 
 **`estimate_tokens(text_expression)`** — a SQL expression estimating tokens (`ceil(len/4)`), no
 AI. Shared by the guard and the log.
 
-**`log_ai_run(function_name, model_name=none, relation=none, input_column=none)`** — **post-hook**
-that appends one row (model, function, row count, est tokens/cost, timestamp, invocation id) to the
-`ai_run_log` model. `relation` defaults to `this`.
+**`log_ai_run(function_name, model_name=none, relation=none, input_column=none, filter=none)`** —
+**post-hook** that appends one row (model, function, row count, est tokens/cost, timestamp,
+invocation id) to the `ai_run_log` model. `relation` defaults to `this`; on an incremental model
+pass `filter` so it records the delta, not the whole corpus, and set `relation` to the source when
+`input_column` isn't carried into the model's output.
 
 **`ai_run_log`** *(model)* — the append-only incremental usage/cost log the post-hook writes to.
 
 ### Incremental / versioning
 
 **`version_guard(pinned_version, version_column='model_version')`** → **bool**. Returns `True`
-when an incremental model must **reprocess all rows** (first build, `--full-refresh`, or the stored
-version differs from `pinned_version`); drive your model's delta `WHERE` with it and pair with a
-`unique_key` so a version bump re-embeds the whole corpus.
+when an incremental model must **reprocess all rows** (first build, `--full-refresh`, the stored
+version differs from `pinned_version`, or the target table predates version stamping and has no
+`version_column` yet — the adoption case, which reprocesses and stamps rather than erroring); drive
+your model's delta `WHERE` with it and pair with a `unique_key` so a version bump re-embeds the
+whole corpus.
 ```sql
 {% if not dbt_context_engineering.version_guard(var('embedding_model')) %}
 where doc_id not in (select doc_id from {{ this }})
 {% endif %}
 ```
 
+**`incremental_delta_predicate(unique_key, version=none, version_column='model_version')`** → the
+delta `WHERE` predicate for an incremental AI model, or `none` when the whole corpus reruns (first
+build / `--full-refresh` / version bump). One source of truth so the body's `where`, the
+`guard_batch` `filter`, and the `log_ai_run` `filter` describe the **same** batch and can't drift.
+Pass `version` for a versioned/embedding model (gates on `version_guard`); omit it to gate on
+`is_incremental()`. Resolves `this`/`is_incremental()`/`version_guard()` correctly inside pre-/post-hooks.
+
 ### Retrieval & knowledge base
 
 **`vector_search(relation, embedding_column, query_embedding, top_k=10, id_column=none, select_columns=none, filter=none)`** — ranked cosine similarity over an embedding **column**
 (brute-force; no index). Returns `[id_column, select_columns..., score]` ordered, `top_k`. `filter`
-restricts the candidate set (e.g. account scoping).
+restricts the candidate set (e.g. account scoping). Ranking has a secondary sort on `id_column` so
+rows tied on score (common with near-duplicate chunks) are stable across runs and engines — pass an
+`id_column` to get that determinism at the `top_k` boundary.
 
 **`create_vector_index(name, relation, column, attributes=[], warehouse=none, target_lag='1 day', embedding_model=none, distance_type='COSINE', index_type='IVF', storing=[])`** — **opt-in,
 `dbt run-operation` ONLY** (never a model). Builds the engine's external, separately-billed index/
@@ -481,7 +515,10 @@ explicitly when done.
 **`knowledge_base(sources)`** — unions many pre-embedded source relations into one common-shape
 mart (`source_type, source_id, account_key, text, embedding, ts`) with per-source lineage. `sources`
 is a list of dicts (`relation, source_type, source_id, account_key, text, embedding, timestamp`);
-register a source by adding one dict.
+register a source by adding one dict. `text` and `ts` are cast to a common type so sources with
+differing types (e.g. a `DATE` vs a `TIMESTAMP` timestamp column) union cleanly on strict engines
+like BigQuery; `embedding` is not cast — all sources must already share one embedding model (and
+thus type), which `version_guard` enforces.
 
 ### Evaluation & groundedness
 
@@ -512,7 +549,7 @@ schemas:
 | `schema_categories(output_schema)` / `schema_label_field(output_schema)` | the enum values / the enum property name (used by `classify`) |
 | `bq_output_schema(json_schema)` | JSON schema → BigQuery `name TYPE` list |
 | `bq_model_params(max_output_tokens, thinking_budget)` | BigQuery `model_params` JSON (output cap + thinking budget) |
-| `str_literal(s)` | a portable SQL string literal (newlines as `chr(10)` for BigQuery) |
+| `str_literal(s)` | a portable SQL string literal — **dispatched**: newlines as `chr(10)` everywhere, single quotes doubled everywhere, and backslashes doubled on Snowflake/Databricks/BigQuery (where `\` is an escape char) but left literal on duckdb/ANSI. Backs `render_prompt` and `classify`'s enum arrays so arbitrary prompt/label text can't break or corrupt the SQL |
 | `require_bq_model()` / `require_databricks_serverless()` | prerequisite checks (BigQuery advisory; Databricks runtime check deferred — currently a no-op) |
 
 ## Configuration

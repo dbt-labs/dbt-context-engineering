@@ -60,10 +60,12 @@
 
 {% macro snowflake__classify(input_column, prompt, output_schema, model) -%}
     {%- set cats = dbt_context_engineering.schema_categories(output_schema) -%}
-    {#- AI_CLASSIFY returns {"labels": ["<label>"]}; unwrap to the scalar label (output contract). -#}
+    {#- AI_CLASSIFY returns {"labels": ["<label>"]}; unwrap to the scalar label (output contract).
+        Labels go through str_literal so a value with a quote/backslash (e.g. "Won't renew") can't
+        break the array literal — the same escaping conforms_to_schema already applies to this enum. -#}
     cast((ai_classify(
         {{ dbt_context_engineering.render_prompt(prompt, input_column) }},
-        array_construct({% for c in cats %}'{{ c }}'{% if not loop.last %}, {% endif %}{% endfor %})
+        array_construct({% for c in cats %}{{ dbt_context_engineering.str_literal(c) }}{% if not loop.last %}, {% endif %}{% endfor %})
     )):labels[0] as {{ dbt.type_string() }})
 {%- endmacro %}
 
@@ -71,10 +73,11 @@
 {% macro databricks__classify(input_column, prompt, output_schema, model) -%}
     {{ dbt_context_engineering.require_databricks_serverless() }}
     {%- set cats = dbt_context_engineering.schema_categories(output_schema) -%}
-    {#- ai_classify already returns the chosen label as a STRING — identity (cast for a stable type). -#}
+    {#- ai_classify already returns the chosen label as a STRING — identity (cast for a stable type).
+        Labels go through str_literal so a value with a quote/backslash can't break the array literal. -#}
     cast(ai_classify(
         {{ dbt_context_engineering.render_prompt(prompt, input_column) }},
-        array({% for c in cats %}'{{ c }}'{% if not loop.last %}, {% endif %}{% endfor %})
+        array({% for c in cats %}{{ dbt_context_engineering.str_literal(c) }}{% if not loop.last %}, {% endif %}{% endfor %})
     ) as {{ dbt.type_string() }})
 {%- endmacro %}
 

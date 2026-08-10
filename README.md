@@ -221,11 +221,13 @@ The full pattern — process only new rows, re-embed on a version bump, guard co
 {{ config(
     materialized  = 'incremental',
     unique_key    = 'doc_id',
-    pre_hook      = "{{ dbt_context_engineering.guard_batch(ref('stg_docs'), 'body',
-                        filter=dbt_context_engineering.incremental_delta_predicate('doc_id', var('embedding_model'))) }}",
-    post_hook     = "{{ dbt_context_engineering.log_ai_run('embed', model_name=var('embedding_model'),
-                        relation=ref('stg_docs'), input_column='body',
-                        filter=dbt_context_engineering.incremental_delta_predicate('doc_id', var('embedding_model'))) }}"
+    pre_hook      = [
+        "{{ dbt_context_engineering.guard_batch(ref('stg_docs'), 'body',
+            filter=dbt_context_engineering.incremental_delta_predicate('doc_id', var('embedding_model'))) }}",
+        "{{ dbt_context_engineering.log_ai_run('embed', model_name=var('embedding_model'),
+            relation=ref('stg_docs'), input_column='body',
+            filter=dbt_context_engineering.incremental_delta_predicate('doc_id', var('embedding_model'))) }}"
+    ]
 ) }}
 {% set delta = dbt_context_engineering.incremental_delta_predicate('doc_id', var('embedding_model')) %}
 select
@@ -238,20 +240,34 @@ from {{ ref('stg_docs') }}
 ```
 
 `version_guard` returns True (reprocess all) on first build, `--full-refresh`, or when the
-stored `model_version` differs from the pinned one — so a model/embedding-version bump re-embeds
+stored `model_version` differs from the pinned one, so a model/embedding-version bump re-embeds
 the whole corpus, and the `unique_key` merge replaces the old rows. No custom materialization.
 
-**Guard AND log the delta, not the corpus — from one source of truth.** The body's `where`, the
+**Guard AND log the delta, not the corpus, from one source of truth.** The body's `where`, the
 guard's `filter`, and the log's `filter` must all describe the same batch, or they drift.
 `incremental_delta_predicate('doc_id', var('embedding_model'))` returns that predicate once (or
 `none` when the whole corpus reruns), so all three agree. Without it: the guard counts the full
 source and, once the corpus passes `max_batch_rows`, every incremental run false-trips even for a
 few new rows; and the log records the whole corpus every run, so `row_count`/`est_cost` are wrong
-by orders of magnitude. Note the post-hook meters `relation=ref('stg_docs')`, **not** `this` — the
-token estimate reads `body`, which exists in the source but not in this model's output
-(`doc_id, model_version, embedding`); metering `this` here would error *after* the embed spend.
-`this`, `is_incremental()`, and `version_guard()` all resolve inside pre-/post-hooks — verified on
-duckdb (`guard_delta`, `logged_filtered`, and their CI steps).
+by orders of magnitude.
+
+**Both `guard_batch` and `log_ai_run` run as pre-hooks here, not the pre/post split you might
+expect.** `log_ai_run` can be used as either a pre-hook or a post-hook when it has no `filter`, or
+a `filter` that doesn't reference `this`. But once `filter` is `incremental_delta_predicate(...)`,
+which expands to `<unique_key> not in (select <unique_key> from {{ this }})`, hook order stops
+being cosmetic: by the time a post-hook fires, this run's merge has already landed the new rows
+into `this`, so that same predicate now finds nothing and logs `row_count = 0` for a run that
+really processed rows. Running `log_ai_run` as a pre-hook, in the same phase as `guard_batch`,
+means both see the same pre-merge state the model body's `where` clause uses. This is why the
+example above departs from a plain "guard before, log after" reading: log after the merge is only
+safe when nothing you're logging depends on `this`.
+
+Note the pre-hook meters `relation=ref('stg_docs')`, **not** `this`, the token estimate reads
+`body`, which exists in the source but not in this model's output (`doc_id, model_version,
+embedding`); metering `this` here would error *before* the embed spend, since the incremental
+merge hasn't run yet. `this`, `is_incremental()`, and `version_guard()` all resolve inside
+pre-/post-hooks, verified on duckdb (`guard_delta`, `logged_filtered`, and `logged_incremental_delta`,
+which exercises the exact two-build, real-delta scenario above end to end).
 
 ## Retrieval (Phase 5)
 

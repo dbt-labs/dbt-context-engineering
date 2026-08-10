@@ -1,9 +1,28 @@
 {#-
-  log_ai_run — post-hook that appends one row to ai_run_log per AI model run (spec §5.4).
+  log_ai_run: appends one row to ai_run_log per AI model run (spec §5.4). Usable as either a
+  pre_hook or a post_hook.
 
-  Usage (post-hook on any AI model):
+  Usage (unfiltered, logs the full relation; safe as either a pre_hook or post_hook):
     {{ config(post_hook = "{{ log_ai_run('classify', model_name='claude-3-5-sonnet',
                                             relation=ref('my_inputs'), input_column='text_col') }}") }}
+
+  Usage on an INCREMENTAL model with `filter` (e.g. incremental_delta_predicate): use a
+  PRE_HOOK, not a post_hook.
+    {{ config(materialized='incremental', unique_key='doc_id',
+       pre_hook = [
+         "{{ guard_batch(ref('stg_docs'), 'body', filter=incremental_delta_predicate('doc_id')) }}",
+         "{{ log_ai_run('embed', relation=ref('stg_docs'), input_column='body',
+                          filter=incremental_delta_predicate('doc_id')) }}"
+       ]) }}
+
+  WARNING: do not pass a `filter` that references `this` (directly, or via
+  incremental_delta_predicate, which expands to `<unique_key> not in (select <unique_key> from
+  {{ this }})`) in a post_hook on an incremental model. By the time a post_hook fires, this run's
+  merge has already landed the new rows into `this`, so that same "not in this" predicate now
+  finds nothing: it logs row_count = 0 for a run that really processed rows. guard_batch and
+  log_ai_run must run in the same hook phase relative to the merge, pre_hook, whenever `filter`
+  is derived from `this`. Confirmed against a live incremental model: see dbt_gong's ADR-0006
+  (github.com/fivetran/dbt_gong) for the reproduction.
 
   Args:
     function_name  which  function issued the call (generate/classify/extract/embed). Required.
@@ -16,7 +35,8 @@
                    magnitude). Pass the SAME predicate the body uses — incremental_delta_predicate()
                    gives all three (body / guard_batch / here) one source of truth. Sizing from `this`
                    (the default) also requires that `input_column` exists in the model's OUTPUT — pass
-                   relation=ref('<source>') when the source column isn't carried into the output.
+                   relation=ref('<source>') when the source column isn't carried into the output. See
+                   the WARNING above before using this on an incremental model.
 
   est_cost = est_tokens / 1000 * var('cost_per_1k_tokens') when both are available; otherwise
   null (left null when no price var is set).

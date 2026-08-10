@@ -150,6 +150,7 @@ field-access assumption needs adjusting (ping me with the row and I'll fix the o
 | Prompts | `render_prompt_test`, `augment_test` | `assert_render_prompt`, `assert_augment_prompt` (enum injection) |
 | Cost guard | `guard_pass` | `not_null` + the §2 trip check |
 | Run log | `logged_model`, `ai_run_log` | `assert_run_log` |
+| Run log (incremental delta, multi-run) | `logged_delta` | `assert_logged_delta` via the multi-run CI step (§4.2) |
 | Version guard | `versioned` | `assert_versioned` |
 | Retrieval | `search_corpus`, `search_results` | `assert_vector_search` |
 | Knowledge base | `kb`, `kb_search`, `source_tickets`, `source_calls` | `assert_knowledge_base`, `assert_kb_search` |
@@ -191,6 +192,30 @@ dbt build --project-dir integration_tests/bigquery --select tag:version_guard --
 rows stay v1 (delta filter ran, nothing reprocessed); at v2 **every** row flips to v2 (the guard
 reprocessed the whole corpus and the `unique_key` merge replaced the old rows). If a bump left any
 row at v1, the test returns a `wrong_version` row.
+
+### 4.2 The multi-run log_ai_run delta step
+
+Whether `log_ai_run` measures the real per-run delta, instead of the full corpus or zero, only
+appears across *sequential* runs too, for the same reason as §4.1: a single `dbt build` never
+produces a partial delta against an already-existing target. This step is what confirmed the
+hook-ordering hazard documented in `log_ai_run`'s docstring and in the "Governed incremental AI
+model" section above (surfaced independently against a live incremental model; see dbt_gong's
+ADR-0006, github.com/fivetran/dbt_gong):
+
+```bash
+dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb --full-refresh
+# ^ ld_phase defaults to 1: a 5-row baseline against the 10-row fixture_utterances seed.
+dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+  --select logged_delta assert_logged_delta --vars '{ld_phase: 2}'   # real 5-row delta
+```
+
+`assert_logged_delta` expects `row_count = 5` on the phase-2 run. `guard_batch` and `log_ai_run`
+both run as pre-hooks here (see `logged_delta.sql`); if either moves to a post-hook while still
+scoped by a `this`-referencing filter, the phase-2 run logs `row_count = 0` instead, since the
+merge has already landed the new rows into `this` by the time a post-hook fires. Confirmed by
+temporarily switching `logged_delta` to the post-hook pattern locally: the phase-1 run is
+unaffected (first build has no filter to get the timing wrong), but the phase-2 run logs
+`row_count = 0` and `assert_logged_delta` fails.
 
 ---
 
@@ -244,8 +269,8 @@ What remains uncovered or conditional (everything else is now covered on all thr
 - **`cost_reconciliation`** — **removed** (2026-07-29); can be re-added later over `ai_run_log`.
 - **Some hardening fixes are covered on duckdb only, by design** — they exercise engine-agnostic dbt
   or Jinja, so duckdb is representative and a cloud copy would test the same code path twice:
-  the incremental **delta-scoping** of `guard_batch`/`log_ai_run` via `incremental_delta_predicate`
-  (pre/post-hook `this` + `run_query`), **`version_guard` adoption** of a column-less table
+  the incremental **delta-scoping** of `guard_batch` via `incremental_delta_predicate`
+  (pre-hook `this` + `run_query`), **`version_guard` adoption** of a column-less table
   (`get_columns_in_relation`), `vector_search`'s **tiebreaker** (standard `ORDER BY … , id`), and
   `render_prompt`'s **`{{ input }}` spacing tolerance / `prompt=none` error** (pure Jinja). See the
   `guard_delta`, `logged_filtered`, `vg_adopt`, `search_ties_*`, `assert_render_prompt_spacing`
@@ -259,7 +284,14 @@ all three warehouses (§4.1). **Adversarial cloud coverage added 2026-08-10** on
 parity** against a golden set (`assert_split_adversarial_*`, catching the Snowflake divergence #7);
 prompt-literal **backslash** + enum-label **apostrophe** escaping executed live via a classify over an
 adversarial prompt/schema (`signals_adversarial_*`, #5/#6); and `knowledge_base` **heterogeneous
-timestamp** (DATE vs TIMESTAMP) union (`kb_hetero_*`, #8).
+timestamp** (DATE vs TIMESTAMP) union (`kb_hetero_*`, #8). **`log_ai_run` post-hook timing hazard
+found and closed 2026-08-10** (§4.2): `logged_filtered` deliberately used a static filter, by its
+own comment, to avoid needing cross-run sequencing, which meant no test ever exercised `log_ai_run`
+with a live `incremental_delta_predicate` filter across a genuine incremental delta. `logged_delta`
++ `assert_logged_delta` now do, and confirmed (by temporarily reintroducing the post-hook pattern
+locally) that a post-hook placement regresses to `row_count = 0` on the exact scenario this suite
+previously couldn't reach. The README's canonical example and `log_ai_run`'s own docstring are
+corrected to the pre-hook pattern accordingly.
 
 ---
 

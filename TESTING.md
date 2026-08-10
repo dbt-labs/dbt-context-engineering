@@ -242,11 +242,24 @@ What remains uncovered or conditional (everything else is now covered on all thr
 - **BigQuery Vertex key casing** (`generationConfig`/`thinkingConfig`) — re-confirm on the first live
   BigQuery run.
 - **`cost_reconciliation`** — **removed** (2026-07-29); can be re-added later over `ai_run_log`.
+- **Some hardening fixes are covered on duckdb only, by design** — they exercise engine-agnostic dbt
+  or Jinja, so duckdb is representative and a cloud copy would test the same code path twice:
+  the incremental **delta-scoping** of `guard_batch`/`log_ai_run` via `incremental_delta_predicate`
+  (pre/post-hook `this` + `run_query`), **`version_guard` adoption** of a column-less table
+  (`get_columns_in_relation`), `vector_search`'s **tiebreaker** (standard `ORDER BY … , id`), and
+  `render_prompt`'s **`{{ input }}` spacing tolerance / `prompt=none` error** (pure Jinja). See the
+  `guard_delta`, `logged_filtered`, `vg_adopt`, `search_ties_*`, `assert_render_prompt_spacing`
+  cases in `integration_tests/duckdb`.
 
 **Closed (were gaps in a prior pass):** classify normalized + asserted; extract flattened, conformance
 + evidence-groundedness asserted; `knowledge_base` union exercised on cloud (`assert_kb_*`);
 `log_ai_run` INSERT asserted on cloud (`assert_run_log_*`); `version_guard` delta + bump run on
-all three warehouses (§4.1).
+all three warehouses (§4.1). **Adversarial cloud coverage added 2026-08-10** on all three warehouses
+(`LIVE-VALIDATION DEFERRED` until the next live-battery run): `split_sentences` **cross-engine boundary
+parity** against a golden set (`assert_split_adversarial_*`, catching the Snowflake divergence #7);
+prompt-literal **backslash** + enum-label **apostrophe** escaping executed live via a classify over an
+adversarial prompt/schema (`signals_adversarial_*`, #5/#6); and `knowledge_base` **heterogeneous
+timestamp** (DATE vs TIMESTAMP) union (`kb_hetero_*`, #8).
 
 ---
 

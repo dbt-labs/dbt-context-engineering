@@ -70,8 +70,15 @@
 {%- endmacro %}
 
 
-{#- Snowflake has no regexp_extract_all: insert a sentinel after each terminator+whitespace run,
-    SPLIT on it, then LATERAL FLATTEN. The trailing empty element is dropped by the outer filter. -#}
+{#- Snowflake has no regexp_extract_all, so we reproduce the SAME boundary rule the other engines get
+    from regexp_extract_all('[^.!?]+[.!?]*') — break after EVERY terminator run — rather than a
+    different rule, so a given corpus splits identically on every engine (portability is the whole
+    point). Do it by: (1) drop a leading terminator run (regexp_extract_all requires a non-terminator
+    to start a match, so it discards one); (2) insert a sentinel after each terminator run; (3) SPLIT
+    + LATERAL FLATTEN. Trailing empty element dropped by the outer filter. Parity with the canonical
+    rule is proven over tricky inputs on duckdb (assert_split_rule_parity). PREVIOUSLY this only broke
+    on terminator+whitespace, so e.g. "Section 3.2 is ready." stayed one sentence on Snowflake but
+    split on the others — a silent cross-engine divergence. -#}
 {% macro snowflake__split_sentences_core(relation, id_column, text_column) -%}
     select
         {{ id_column }} as document_id,
@@ -79,6 +86,9 @@
         trim(f.value::string) as sentence_text
     from {{ relation }},
          lateral flatten(input => split(
-             regexp_replace({{ text_column }}, '([.!?]+)[[:space:]]', '\\1~~CE_SENT~~'), '~~CE_SENT~~'
+             regexp_replace(
+                 regexp_replace({{ text_column }}, '^[.!?]+', ''),
+                 '([.!?]+)', '\\1~~CE_SENT~~'
+             ), '~~CE_SENT~~'
          )) f
 {%- endmacro %}

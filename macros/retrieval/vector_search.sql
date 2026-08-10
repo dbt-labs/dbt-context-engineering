@@ -37,7 +37,9 @@ select
     {{ cosine_fn }}({{ embedding_column }}, {{ query_embedding }}) as score
 from {{ relation }}
 {% if filter is not none %}where {{ filter }}{% endif %}
-order by score desc
+{#- secondary sort on id_column so rows tied at the top_k cutoff are stable across runs/engines
+    (near-duplicate chunks routinely tie on score); without it the boundary row is nondeterministic -#}
+order by score desc{% if id_column is not none %}, {{ id_column }}{% endif %}
 limit {{ top_k }}
 {%- endmacro %}
 
@@ -73,4 +75,8 @@ limit {{ top_k }}
         distance_type => 'COSINE',
         options => '{"use_brute_force": true}'
     )
+    {#- stable output ordering, with id_column as the tiebreaker to match the scalar engines. Note the
+        VECTOR_SEARCH table function still picks which top_k rows come back, so a tie AT the cutoff is
+        resolved inside it; this orders the returned set deterministically. -#}
+    order by score desc{% if id_column is not none %}, base.{{ id_column }}{% endif %}
 {%- endmacro %}

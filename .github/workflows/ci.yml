@@ -59,6 +59,31 @@ jobs:
           else
             echo "guard_batch tripped as expected (non-zero exit)"
           fi
+      - name: circuit breaker scopes to the incremental delta (expect PASS)
+        # guard_batch must count the rows the run ACTUALLY processes, not the whole source. The main
+        # build already built guard_delta once (first build: version_guard=True, counts full 10).
+        # Re-run it INCREMENTALLY at the same version with a ceiling of 3: the full 10-row relation
+        # would trip (10 > 3), so this can only pass if `this` and version_guard() resolve inside the
+        # pre-hook and the filter scopes the count to the 0-row delta. A non-zero exit means the guard
+        # is still counting the full corpus (the incremental false-trip bug), so fail the job.
+        run: |
+          if dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+               --select guard_delta assert_guard_delta --vars '{max_batch_rows: 3, gd_version: v1}'; then
+            echo "guard_batch scoped to the delta as expected (this/version_guard resolved in pre-hook)"
+          else
+            echo "::error::guard_batch did NOT scope to the delta (counted the full relation)"; exit 1
+          fi
+      - name: circuit breaker re-guards the whole corpus on a version bump (expect FAILURE)
+        # Complement of the previous step: bump gd_version so version_guard=True, which drops both the
+        # body's delta WHERE and the guard's filter. The guard must then count the full 10-row corpus
+        # and RAISE at ceiling 3 — proving the scoping does NOT let a full re-embed slip past unguarded.
+        run: |
+          if dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+               --select guard_delta --vars '{max_batch_rows: 3, gd_version: v2}'; then
+            echo "::error::guard_batch did NOT trip on the full corpus during a version bump"; exit 1
+          else
+            echo "guard_batch re-guarded the full corpus on the version bump as expected"
+          fi
       - name: version guard sequence — delta + version bump (duckdb)
         # version_guard only shows its behavior across SEQUENTIAL runs. The main build above
         # already built versioned at v1 (full-refresh). Run 2 keeps v1 -> the delta filter runs
@@ -69,6 +94,17 @@ jobs:
             --select versioned assert_versioned --vars '{test_version: v1}'
           dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
             --select versioned assert_versioned --vars '{test_version: v2}'
+      - name: version guard adopts a pre-existing table without the version column (duckdb)
+        # Adoption path (finding #9): run 1 builds vg_adopt in a LEGACY shape (no model_version column)
+        # via --full-refresh. Run 2 is the first version_guard run against that column-less table — the
+        # old code read model_version unconditionally and raised "column does not exist"; the fix
+        # detects the missing column and reprocesses all rows, stamping the version. A non-zero exit on
+        # run 2 means the adoption path regressed. assert_vg_adopt then pins the stamped result.
+        run: |
+          dbt run --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+            --select vg_adopt --full-refresh --vars '{vg_legacy: true}'
+          dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+            --select vg_adopt assert_vg_adopt --vars '{vg_legacy: false, vg_ver: v1}'
 
   # Live battery — OPT-IN (manual `workflow_dispatch` only; never runs on PR/push). Runs the full
   # integration battery against real warehouses for all three adapters. Requires a repo secret

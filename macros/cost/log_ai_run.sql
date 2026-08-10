@@ -21,9 +21,8 @@
   merge has already landed the new rows into `this`, so that same "not in this" predicate now
   finds nothing: it logs row_count = 0 for a run that really processed rows. guard_batch and
   log_ai_run must run in the same hook phase relative to the merge, pre_hook, whenever `filter`
-  is derived from `this`. Confirmed against a live incremental model: see dbt_gong's ADR-0006
-  (github.com/fivetran/dbt_gong) for the reproduction.
-
+  is derived from `this`. 
+  
   Args:
     function_name  which  function issued the call (generate/classify/extract/embed). Required.
     model_name     the AI model used (the largest cost lever; always logged). Optional.

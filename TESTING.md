@@ -199,8 +199,7 @@ Whether `log_ai_run` measures the real per-run delta, instead of the full corpus
 appears across *sequential* runs too, for the same reason as §4.1: a single `dbt build` never
 produces a partial delta against an already-existing target. This step is what confirmed the
 hook-ordering hazard documented in `log_ai_run`'s docstring and in the "Governed incremental AI
-model" section above (surfaced independently against a live incremental model; see dbt_gong's
-ADR-0006, github.com/fivetran/dbt_gong):
+model" section above:
 
 ```bash
 dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb --full-refresh
@@ -276,22 +275,30 @@ What remains uncovered or conditional (everything else is now covered on all thr
   `guard_delta`, `logged_filtered`, `vg_adopt`, `search_ties_*`, `assert_render_prompt_spacing`
   cases in `integration_tests/duckdb`.
 
-**Closed (were gaps in a prior pass):** classify normalized + asserted; extract flattened, conformance
-+ evidence-groundedness asserted; `knowledge_base` union exercised on cloud (`assert_kb_*`);
-`log_ai_run` INSERT asserted on cloud (`assert_run_log_*`); `version_guard` delta + bump run on
-all three warehouses (§4.1). **Adversarial cloud coverage added 2026-08-10** on all three warehouses
-(`LIVE-VALIDATION DEFERRED` until the next live-battery run): `split_sentences` **cross-engine boundary
-parity** against a golden set (`assert_split_adversarial_*`, catching the Snowflake divergence #7);
-prompt-literal **backslash** + enum-label **apostrophe** escaping executed live via a classify over an
-adversarial prompt/schema (`signals_adversarial_*`, #5/#6); and `knowledge_base` **heterogeneous
-timestamp** (DATE vs TIMESTAMP) union (`kb_hetero_*`, #8). **`log_ai_run` post-hook timing hazard
-found and closed 2026-08-10** (§4.2): `logged_filtered` deliberately used a static filter, by its
-own comment, to avoid needing cross-run sequencing, which meant no test ever exercised `log_ai_run`
-with a live `incremental_delta_predicate` filter across a genuine incremental delta. `logged_delta`
-+ `assert_logged_delta` now do, and confirmed (by temporarily reintroducing the post-hook pattern
-locally) that a post-hook placement regresses to `row_count = 0` on the exact scenario this suite
-previously couldn't reach. The README's canonical example and `log_ai_run`'s own docstring are
-corrected to the pre-hook pattern accordingly.
+**Closed (were gaps in a prior pass):**
+
+- Classify normalized and asserted.
+- Extract flattened, with conformance and evidence-groundedness asserted.
+- `knowledge_base` union exercised on cloud (`assert_kb_*`).
+- `log_ai_run` INSERT asserted on cloud (`assert_run_log_*`).
+- `version_guard` delta and bump run on all three warehouses (§4.1).
+
+**Adversarial cloud coverage, added 2026-08-10,** on all three warehouses (`LIVE-VALIDATION
+DEFERRED` until the next live-battery run):
+
+- `split_sentences` **cross-engine boundary parity** against a golden set
+  (`assert_split_adversarial_*`, catching the Snowflake divergence #7).
+- Prompt-literal **backslash** and enum-label **apostrophe** escaping, executed live via a classify
+  over an adversarial prompt/schema (`signals_adversarial_*`, #5/#6).
+- `knowledge_base` **heterogeneous timestamp** (DATE vs TIMESTAMP) union (`kb_hetero_*`, #8).
+
+**`log_ai_run` post-hook timing hazard, found and closed 2026-08-10 (§4.2):** `logged_filtered`
+deliberately used a static filter, by its own comment, to avoid needing cross-run sequencing, so no
+test ever exercised `log_ai_run` with a live `incremental_delta_predicate` filter across a genuine
+incremental delta. `logged_delta` + `assert_logged_delta` now cover that case, confirmed by
+temporarily reintroducing the post-hook pattern locally and watching it regress to `row_count = 0`.
+The README's canonical example and `log_ai_run`'s own docstring are corrected to the pre-hook
+pattern accordingly.
 
 ---
 

@@ -7,7 +7,8 @@
         "{{ dbt_context_engineering.log_ai_run('embed', model_name='logged-delta-test',
              relation=ref('fixture_utterances'), input_column='utterance_text',
              filter=logged_delta_filter()) }}"
-    ]
+    ],
+    post_hook    = "{{ dbt_context_engineering.complete_ai_run('embed', model_name='logged-delta-test') }}"
 ) }}
 
 {#- Exercises guard_batch and log_ai_run as PRE-hooks against a genuine incremental delta, both
@@ -28,6 +29,10 @@
     Phase 2 (ld_phase=2, run WITHOUT --full-refresh right after phase 1): processes the full
     10-row fixture; utterance_id 6-10 is the real incremental delta (5 rows). log_ai_run's row
     from phase 2 records row_count=5, the actual number of rows this run processed.
+
+    complete_ai_run runs as a post_hook (safe here even though log_ai_run is a pre_hook — its
+    UPDATE is keyed on invocation_id/function_name/model_name, never on `this`) and flips that same
+    row to completed=true once the model body finishes.
  -#}
 select utterance_id, utterance_text
 from {{ ref('fixture_utterances') }}

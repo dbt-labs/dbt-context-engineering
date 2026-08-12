@@ -28,6 +28,7 @@ bad_values as (
        or log.row_count <> expected.exp_row_count
        or log.est_tokens <> expected.exp_est_tokens
        or log.run_at is null
+       or log.completed <> true
        {% if price is none %}or log.est_cost is not null{% else %}or log.est_cost <> cast(expected.exp_est_tokens / 1000.0 * {{ price }} as {{ dbt.type_numeric() }}){% endif %}
 )
 select * from bad_count

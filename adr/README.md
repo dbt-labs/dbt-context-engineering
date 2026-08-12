@@ -35,6 +35,8 @@ just record the choice.
 | [0018](0018-snowflake-extract-via-ai-complete.md) | Converge the Snowflake extract path onto AI_COMPLETE | Accepted |
 | [0019](0019-run-log-assertion-scoped-to-invocation.md) | Scope the run-log assertion to the current invocation | Accepted |
 | [0020](0020-run-log-standin-duckdb-only.md) | The no-AI run-log stand-in exists only on the duckdb tier | Accepted |
+| [0021](0021-run-completion-as-a-boolean-set-by-its-own-post-hook.md) | Run completion tracked as a boolean, set only by its own post-hook | Accepted |
+| [0022](0022-log-ai-run-hook-phase-follows-what-this-means.md) | `log_ai_run`'s hook phase follows what `this` means to the call | Accepted |
 
 ## New here? A reading path
 
@@ -66,6 +68,8 @@ of the discipline.
    - [0015](0015-functional-test-parity-across-tiers.md) — functional test parity across integration tiers
    - [0019](0019-run-log-assertion-scoped-to-invocation.md) — run-log assertion scoped to the current invocation
    - [0020](0020-run-log-standin-duckdb-only.md) — the no-AI run-log stand-in exists only on the duckdb tier
+   - [0021](0021-run-completion-as-a-boolean-set-by-its-own-post-hook.md), run completion as a boolean, set only by its own post-hook
+   - [0022](0022-log-ai-run-hook-phase-follows-what-this-means.md), why `log_ai_run`'s hook phase depends on what `this` means to the call
    - [0017](0017-teardown-across-platforms.md) — teardown across platforms to support iteration
 
 ## Conventions

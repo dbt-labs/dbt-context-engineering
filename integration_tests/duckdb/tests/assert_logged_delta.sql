@@ -11,4 +11,4 @@ from {{ ref('ai_run_log') }}
 where invocation_id = '{{ invocation_id }}'
   and function_name = 'embed'
   and model_name = 'logged-delta-test'
-  and row_count <> 5
+  and (row_count <> 5 or completed <> true)

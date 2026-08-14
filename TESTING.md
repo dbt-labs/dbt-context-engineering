@@ -216,6 +216,70 @@ temporarily switching `logged_delta` to the post-hook pattern locally: the phase
 unaffected (first build has no filter to get the timing wrong), but the phase-2 run logs
 `row_count = 0` and `assert_logged_delta` fails.
 
+### 4.3 The content-hash delta step (embedding metadata)
+
+Whether a row whose *key* already exists but whose *source text changed* actually gets caught and
+re-embedded, rather than silently frozen the way version_guard alone would leave it (see
+ADR-0023), also only appears across sequential runs:
+
+```bash
+dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+  --select content_hash_delta_stg content_hash_delta ai_run_log fixture_utterances --full-refresh
+# ^ ch_edit_id defaults to -1: a 10-row baseline, no simulated edit.
+dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+  --select content_hash_delta_stg content_hash_delta ai_run_log assert_content_hash_delta \
+  --vars '{ch_edit_id: 5}'   # simulates utterance_id 5's source text changing
+```
+
+`assert_content_hash_delta` expects `row_count = 1` on the phase-2 run (exactly the edited row, not
+the whole 10-row corpus and not 0), and that utterance_id 5's `embedded_at` is strictly newer than
+every other row's, proving those other 9 rows stayed frozen rather than getting touched. `embedding`
+here is a fixed stand-in literal, duckdb has no `embed()` implementation (matches the rest of the
+AI surface, LIVE-VALIDATION DEFERRED), so this exercises the metadata/delta mechanism, not a real
+vector. `content_hash` is computed in the upstream `content_hash_delta_stg` view, not inline in
+`content_hash_delta` itself, both because `guard_batch`/`log_ai_run`'s `relation` needs an actual
+`content_hash` column to filter on, and because a same-`SELECT` alias can't be filtered on in the
+same query (the BigQuery trap `chunk.sql`'s own comments already document).
+
+The delta condition is a row-value `NOT IN`, not a correlated subquery: a correlated form of this
+comparison (an unqualified column inside the subquery resolving to the subquery's own same-named
+column instead of the outer row) returns wrong answers whenever the correlated column names match
+on both sides, which they always do here. See ADR-0023's Reasoning section for the full case.
+
+`content_hash_delta_sf`/`_dbx`/`_bq` and their staging models/tests mirror this exact scenario on
+all three cloud warehouses (same two-build sequence, `--select ..._sf ... --vars '{ch_edit_id: 5}'`
+after a full-refresh baseline), confirming the same two things a cloud run alone can prove: the
+row-value `NOT IN` predicate works inside each engine's real incremental merge, not just in
+isolation, and BigQuery's merge log line for the phase-2 build shows exactly 1 row processed,
+matching the edited row, not the whole 10-row corpus.
+
+### 4.4 The chunk_id orphaning relationships test
+
+`chunk_id` is derived from a cumulative token sum within a partition, so a re-chunk can make a key
+that used to exist simply stop being produced, not go null, absent. Nothing in the incremental
+merge removes a row whose key is no longer in the source query; that's surfaced with a
+`relationships` test rather than fixed (see ADR-0023's Consequences, and ADR-0004's "smallest
+mechanism" reasoning for why no deletion logic was added instead):
+
+```bash
+dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+  --select orphan_chunks orphan_embeddings --full-refresh --vars '{oc_target_tokens: 20}'
+# simulate a re-chunk: rebuild ONLY orphan_chunks with a different chunking config
+dbt run --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+  --select orphan_chunks --full-refresh --vars '{oc_target_tokens: 100}'
+dbt test --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+  --select relationships_orphan_embeddings_chunk_id__chunk_id__ref_orphan_chunks_
+# ^ expect this to FAIL. That is the point of this test.
+```
+
+`orphan_chunks_sf`/`_dbx`/`_bq` and `orphan_embeddings_sf`/`_dbx`/`_bq` mirror this same scenario
+on all three cloud warehouses (same baseline, re-chunk, and expected-failure sequence, selecting
+the `_sf`/`_dbx`/`_bq`-suffixed models and the corresponding `relationships_orphan_embeddings_*`
+test name), confirming the deliberate re-chunk step actually orphans rows and the relationships
+test actually catches it on each engine, not just duckdb.
+
+Rebuild both models together with matching vars afterward to leave the local database clean.
+
 ---
 
 ## 5. What to look out for in the results
@@ -239,6 +303,8 @@ column names the problem (e.g. `wrong_top_hit`, `bad_accuracy`, `extract_null`).
 | `assert_run_log_*` (LIVE) | 0 rows | `no_classify_row` → `log_ai_run`'s post-hook INSERT never landed (hook error / ordering). `bad_values` → `row_count`≠10, `est_tokens` null/≤0, or `run_at` null → a cross-engine cast/typing problem in the log INSERT (the classic BigQuery pitfall). |
 | `assert_versioned_*` (multi-run) | 0 rows at each version | `wrong_version` after the v2 run → the guard did **not** reprocess on a version bump (delta filter wasn't skipped). `bad_count_or_dupes` → the `unique_key` merge duplicated instead of replacing. |
 | `assert_run_log` (duckdb) | 0 rows | If it fails after a **repeat** build, it's the append-only log accumulating — rebuild with `--full-refresh` (see §2). |
+| `assert_content_hash_delta` (duckdb, multi-run, §4.3) | 0 rows | `wrong_row_count` ≠ 1 on the phase-2 run → the content-hash delta condition isn't isolating the single changed row (0 → frozen everything, 10 → reprocessed the whole corpus). `edited_row_not_reembedded` → the edited row's `embedded_at` didn't actually update, the delta predicate found it but the merge didn't touch it. |
+| `relationships_orphan_embeddings_chunk_id__...` (duckdb, multi-run, §4.4) | 0 rows normally; **expected to fail** after the deliberate re-chunk step | This is the one test in this file meant to fail on command. If it *doesn't* fail after §4.4's steps, the relationships test isn't actually catching the orphan. |
 | circuit-breaker trip (§2) | **non-zero exit** | If it exits 0, `guard_batch` failed to raise over the ceiling. |
 
 General cloud red flags: an opaque SQL error at build (not a clean `*` compiler error) usually
@@ -266,6 +332,12 @@ What remains uncovered or conditional (everything else is now covered on all thr
 - **BigQuery Vertex key casing** (`generationConfig`/`thinkingConfig`) — re-confirm on the first live
   BigQuery run.
 - **`cost_reconciliation`** — **removed** (2026-07-29); can be re-added later over `ai_run_log`.
+- **The embedding metadata surface has full functional parity across all four tiers.** The
+  primitives (`content_hash`, `embedding_dimension`, `row_value_not_in`) and the full multi-run
+  scenarios (§4.3's content-hash delta, §4.4's chunk_id orphaning) are confirmed on Snowflake,
+  Databricks, and BigQuery, not just duckdb. `row_value_not_in()` is dispatched because BigQuery
+  rejects the plain row-value `NOT IN` form and needs its subquery wrapped as a single tuple, a
+  form Snowflake/Databricks both reject in turn; see ADR-0023's Reasoning.
 - **Some hardening fixes are covered on duckdb only, by design** — they exercise engine-agnostic dbt
   or Jinja, so duckdb is representative and a cloud copy would test the same code path twice:
   the incremental **delta-scoping** of `guard_batch` via `incremental_delta_predicate`
@@ -282,6 +354,7 @@ What remains uncovered or conditional (everything else is now covered on all thr
 - `knowledge_base` union exercised on cloud (`assert_kb_*`).
 - `log_ai_run` INSERT asserted on cloud (`assert_run_log_*`).
 - `version_guard` delta and bump run on all three warehouses (§4.1).
+- Content-hash delta and chunk_id orphaning run on all three warehouses (§4.3, §4.4).
 
 **Adversarial cloud coverage, added 2026-08-10,** on all three warehouses (`LIVE-VALIDATION
 DEFERRED` until the next live-battery run):

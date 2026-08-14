@@ -14,5 +14,5 @@
 -#}
 
 {% macro embedding_logic_hash() -%}
-    {{ return('d5f465efbd4dda4f2fbbac742ced40dcb22ad06c637560e9316d5b48a9f26a4d') }}
+    {{ return('93a0765f23e8758e6de88c722bfd3e4069738f6ce0a04a49e8aaa8a819b48327') }}
 {%- endmacro %}

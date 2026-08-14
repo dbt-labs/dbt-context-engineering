@@ -1,8 +1,7 @@
 # Testing guide — `dbt_context_engineering`
 
 How to run the test suite in each environment, what each run builds, and what to look for in the
-results. See `docs/ARCHITECTURE.md` §9 for the design rationale and `CLAUDE.md` for the testing
-posture (structure-only for cloud AI; full deterministic execution on duckdb).
+results. Testing posture: structure-only for cloud AI, full deterministic execution on duckdb.
 
 ---
 
@@ -10,9 +9,9 @@ posture (structure-only for cloud AI; full deterministic execution on duckdb).
 
 | Gate | Where | Needs creds? | What it proves | How it runs |
 |---|---|---|---|---|
-| **Structure** | all 3 cloud projects | no | every macro/model/test **renders** the right per-dialect SQL (`dbt parse`, no warehouse connection) | CI `structure` job, on every PR |
+| **Structure** | `integration_tests/cloud` (all 3 targets) | no | every macro/model/test **renders** the right per-dialect SQL (`dbt parse`, no warehouse connection) | CI `structure` job, on every PR |
 | **Deterministic** | `integration_tests/duckdb` | no | everything that doesn't need a cloud AI service is **executed and asserted** on a local duckdb | CI `deterministic-tests` job, on every PR; run it locally too |
-| **Live battery** | `integration_tests/{snowflake,databricks,bigquery}` | **yes** | the wrappers + evaluation + accessors actually **run on the real warehouse** and return sane results | CI `live-battery` job — **opt-in**, manual `workflow_dispatch` only |
+| **Live battery** | `integration_tests/cloud` (`--target snowflake/databricks/bigquery`) | **yes** | the wrappers + evaluation + accessors actually **run on the real warehouse** and return sane results | CI `live-battery` job — **opt-in**, manual `workflow_dispatch` only |
 
 The rule of thumb: **duckdb proves the logic; the live battery proves the dialect + the model
 actually works.** A green PR only requires the first two (no credentials). The live battery is how
@@ -64,17 +63,20 @@ This runs the same projects against Snowflake, Databricks, or BigQuery. **It mak
 and costs real money** (small — the fixtures are ~10 rows; the `generate_text` model is capped
 to 2 rows). It also creates real tables.
 
-### 3.1 One-time setup — a profile per warehouse
+### 3.1 One-time setup — one profile, three targets
 
-Add entries to `~/.dbt/profiles.yml` matching the project `profile:` names:
+Add a single `dbt-context-engineering` profile to `~/.dbt/profiles.yml` (matching
+`integration_tests/cloud`'s and `integration_tests/duckdb`'s `profile:`), with one target per
+warehouse. See `integration_tests/sample.profiles.yml` for a copy-paste starting point with every
+required field.
 
-| Project | `profile:` name | adapter |
-|---|---|---|
-| `integration_tests/snowflake` | `jaffle-mcp-demo` | `dbt-snowflake` |
-| `integration_tests/databricks` | `databricks` | `dbt-databricks` |
-| `integration_tests/bigquery` | `bigquery` | `dbt-bigquery` |
+| Target | adapter |
+|---|---|
+| `snowflake` | `dbt-snowflake` |
+| `databricks` | `dbt-databricks` |
+| `bigquery` | `dbt-bigquery` |
 
-Install the adapter you need, e.g. `pip install dbt-bigquery`.
+Install the adapter(s) you need, e.g. `pip install dbt-bigquery`.
 
 ### 3.2 Set the model vars
 
@@ -91,18 +93,20 @@ max_output_tokens: 1024
 ```
 
 Snowflake/Databricks use their own model names (e.g. Snowflake `mistral-large2`,
-Databricks `databricks-claude-haiku-4-5` / `databricks-gte-large-en`). See each project's README.
+Databricks `databricks-claude-haiku-4-5` / `databricks-gte-large-en`) — these are set per-target
+via `target.type` conditionals in `integration_tests/cloud/dbt_project.yml`. See the project's
+README.
 
 ### 3.3 Run it
 
 ```bash
 # per warehouse (example: bigquery)
-dbt deps  --project-dir integration_tests/bigquery
-dbt build --project-dir integration_tests/bigquery --full-refresh
+dbt deps  --project-dir integration_tests/cloud
+dbt build --project-dir integration_tests/cloud --target bigquery --full-refresh
 ```
 
 Or trigger all three in CI: `gh workflow run ci.yml` (the `live-battery` job; needs the repo secret
-`DBT_PROFILES_YML` holding all three profiles).
+`DBT_PROFILES_YML` holding the merged profile).
 
 Expected result: all models build and all **13** `assert_*` tests pass. A failure here is meaningful
 — it means a wrapper's dialect is wrong for that account, a model returned nothing, or the AI
@@ -114,14 +118,14 @@ The first time you point this at a warehouse, isolate problems by building in la
 big `dbt build`:
 
 ```bash
-P="--project-dir integration_tests/bigquery"   # or snowflake / databricks
+P="--project-dir integration_tests/cloud --target bigquery"   # or --target snowflake / databricks
 
 # 1) Deterministic first — no AI, proves connectivity + the eval/guard SQL on the real engine.
-dbt build $P --full-refresh --select eval_metrics_bq assert_eval_metrics_bq \
-  assert_grounded_bq assert_conforms_catches_bq
+dbt build $P --full-refresh --select eval_metrics assert_eval_metrics \
+  assert_grounded assert_conforms_catches
 
 # 2) One cheap AI call — proves the model var / endpoint / prerequisite are right before spending more.
-dbt build $P --select generate_bq assert_wrappers_nonnull_bq
+dbt build $P --select generate assert_wrappers_nonnull
 
 # 3) The rest of the battery.
 dbt build $P --full-refresh
@@ -135,8 +139,9 @@ What a clean warehouse pass looks like: every model `OK`, every test `PASS`, and
 `classify` row with `row_count = 10`. Read any failure by its first-column label against the table in
 §5. The **most likely first-run issues** are (a) a wrong `model_*` / embedding var for the account,
 (b) an unmet prerequisite (Databricks needs a **serverless** warehouse + DBR 18.2+; BigQuery needs the
-AI API enabled), and (c) on BigQuery, a null `signal`/`evidence` in `assert_*_conforms_bq` → the STRUCT
-field-access assumption needs adjusting (ping me with the row and I'll fix the one line).
+AI API enabled), and (c) on BigQuery, a null `signal`/`evidence` in `assert_*_conforms` (run with
+`--target bigquery`) → the STRUCT field-access assumption needs adjusting (ping me with the row and I'll
+fix the one line).
 
 ---
 
@@ -157,20 +162,24 @@ field-access assumption needs adjusting (ping me with the row and I'll fix the o
 | **Evaluation (P7)** | `eval_predictions`, `eval_metrics` | `assert_eval_metrics`, `assert_grounded`, `assert_conforms`, `assert_conforms_catches`, `grounded` generic test |
 | **Output accessors** | `flatten_test` | `assert_flatten`, `assert_flatten_conforms` |
 
-### Each cloud project (`_sf` / `_dbx` / `_bq` suffix) — real warehouse
+### `integration_tests/cloud` (`--target snowflake` / `databricks` / `bigquery`) — real warehouse
+
+One shared project, one fixture per capability, run once per target. `model_generate` /
+`embedding_model` (and BigQuery's `bq_thinking_budget`) resolve per-target via `target.type`
+conditionals in `dbt_project.yml`.
 
 | Capability | Models (LIVE = real AI call) | Asserted by | Tier |
 |---|---|---|---|
-| Chunking | `chunk_*`, `chunk_docs_*`, `split_docs_*` | build only (logic proven on duckdb) | deterministic |
-| Generate | `generate_*` (LIVE, structured) | `assert_wrappers_nonnull_*` | live |
-| Classify | `signals_*` (LIVE, now a scalar label) | `assert_wrappers_nonnull_*`, `assert_signals_conform_*` | live |
-| Extract | `extract_*` (LIVE), `extract_flat_*` (field flatten + source text) | `assert_wrappers_nonnull_*`, `assert_extract_conforms_*`, `assert_extract_grounded_*` | live |
-| Embed + retrieval | `embeddings_*`, `search_*` (LIVE) | `assert_search_*` | live |
-| Knowledge base | `kb_*` (union over the embedded fixture) | `assert_kb_*` | live |
-| Run log | populated by `signals_*` post-hook (+ `logged_bq`) → `ai_run_log` | `assert_run_log_*` | live |
-| Version guard | `versioned_*` (incremental, no AI; tag `version_guard`) | `assert_versioned_*` via the multi-run CI step (§4.1) | deterministic |
-| **Evaluation (P7)** | `eval_metrics_*` (no AI) | `assert_eval_metrics_*`, `assert_grounded_*`, `assert_conforms_catches_*` | deterministic |
-| **Output accessors** | `flatten_*` (from `generate_*`), `generate_text_*` (LIVE) | `assert_flatten_conforms_*`, `assert_generate_text_*` | live |
+| Chunking | `chunk_*`, `chunk_docs`, `split_docs` | build only (logic proven on duckdb) | deterministic |
+| Generate | `generate` (LIVE, structured) | `assert_wrappers_nonnull` | live |
+| Classify | `signals` (LIVE, now a scalar label) | `assert_wrappers_nonnull`, `assert_signals_conform` | live |
+| Extract | `extract` (LIVE), `extract_flat` (field flatten + source text) | `assert_wrappers_nonnull`, `assert_extract_conforms`, `assert_extract_grounded` | live |
+| Embed + retrieval | `embeddings`, `search` (LIVE) | `assert_search` | live |
+| Knowledge base | `kb`, `kb_hetero` (union over the embedded fixture) | `assert_kb`, `assert_kb_hetero` | live |
+| Run log | populated by `signals` post-hook → `ai_run_log` | `assert_run_log` | live |
+| Version guard | `versioned` (incremental, no AI; tag `version_guard`) | `assert_versioned` via the multi-run CI step (§4.1) | deterministic |
+| **Evaluation (P7)** | `eval_metrics` (no AI) | `assert_eval_metrics`, `assert_grounded`, `assert_conforms_catches` | deterministic |
+| **Output accessors** | `flatten` (from `generate`), `generate_text` (LIVE) | `assert_flatten_conforms`, `assert_generate_text` | live |
 
 ### 4.1 The multi-run version-guard step
 
@@ -246,12 +255,12 @@ comparison (an unqualified column inside the subquery resolving to the subquery'
 column instead of the outer row) returns wrong answers whenever the correlated column names match
 on both sides, which they always do here. See ADR-0023's Reasoning section for the full case.
 
-`content_hash_delta_sf`/`_dbx`/`_bq` and their staging models/tests mirror this exact scenario on
-all three cloud warehouses (same two-build sequence, `--select ..._sf ... --vars '{ch_edit_id: 5}'`
-after a full-refresh baseline), confirming the same two things a cloud run alone can prove: the
-row-value `NOT IN` predicate works inside each engine's real incremental merge, not just in
-isolation, and BigQuery's merge log line for the phase-2 build shows exactly 1 row processed,
-matching the edited row, not the whole 10-row corpus.
+`content_hash_delta` and its staging model/tests mirror this exact scenario on all three cloud
+targets (same two-build sequence, `--target snowflake/databricks/bigquery --select content_hash_delta_stg
+content_hash_delta ai_run_log --vars '{ch_edit_id: 5}'` after a full-refresh baseline), confirming
+the same two things a cloud run alone can prove: the row-value `NOT IN` predicate works inside each
+engine's real incremental merge, not just in isolation, and BigQuery's merge log line for the
+phase-2 build shows exactly 1 row processed, matching the edited row, not the whole 10-row corpus.
 
 ### 4.4 The chunk_id orphaning relationships test
 
@@ -272,11 +281,11 @@ dbt test --project-dir integration_tests/duckdb --profiles-dir integration_tests
 # ^ expect this to FAIL. That is the point of this test.
 ```
 
-`orphan_chunks_sf`/`_dbx`/`_bq` and `orphan_embeddings_sf`/`_dbx`/`_bq` mirror this same scenario
-on all three cloud warehouses (same baseline, re-chunk, and expected-failure sequence, selecting
-the `_sf`/`_dbx`/`_bq`-suffixed models and the corresponding `relationships_orphan_embeddings_*`
-test name), confirming the deliberate re-chunk step actually orphans rows and the relationships
-test actually catches it on each engine, not just duckdb.
+`orphan_chunks` and `orphan_embeddings` mirror this same scenario on all three cloud targets
+(same baseline, re-chunk, and expected-failure sequence, run with `--target snowflake/databricks/bigquery` against the
+same `relationships_orphan_embeddings_chunk_id__chunk_id__ref_orphan_chunks_` test name),
+confirming the deliberate re-chunk step actually orphans rows and the relationships test actually
+catches it on each engine, not just duckdb.
 
 Rebuild both models together with matching vars afterward to leave the local database clean.
 
@@ -289,19 +298,19 @@ column names the problem (e.g. `wrong_top_hit`, `bad_accuracy`, `extract_null`).
 
 | Test | Passing result | Red flags & how to read them |
 |---|---|---|
-| `assert_eval_metrics(_*)` | 0 rows | `bad_accuracy` → `eval` math or `type_float` cast wrong on this engine. `bad_shape` → the full-outer-join label set changed. Metrics are exact (0.75 / 1.0 / 0.5) — any drift is a real bug, **not** float noise. |
-| `assert_grounded(_*)`, `grounded` generic | 0 rows | A returned row = a quote that is **not** a substring of its source after case/whitespace normalization → `contains`/`collapse_ws`/`norm_text` mis-rendered for this dialect (e.g. BigQuery raw-string regex, Snowflake's 4th-arg gotcha). |
-| `assert_conforms_catches(_*)` | 0 rows | `schema_enum` failed to resolve the taxonomy, or `IN (...)` list built wrong. |
-| `assert_search_*` (LIVE) | 0 rows | `wrong_count` ≠ 3 → `top_k`/`VECTOR_SEARCH` wiring off (watch **BigQuery's** divergent table-function path). `not_descending` → ordering/score sign wrong (BigQuery uses `1 - distance`). `score_out_of_range` → not cosine. `wrong_top_hit` → the near-identical utterance didn't rank #1 → **embedding quality / wrong embedding model**, or query embedded with a different model than the corpus. |
-| `assert_flatten_conforms_*` (LIVE) | 0 rows | A row = the flattened `signal` is null or off-taxonomy. Null → `field` path wrong for this engine's output shape (VARIANT `:` / STRUCT `.` / JSON `get_json_object`). Off-taxonomy value → the model ignored the schema (most likely on **BigQuery**, where the enum is prompt-constrained only, not schema-enforced). |
-| `assert_generate_text_*` (LIVE) | 0 rows | Empty/null text → `text` didn't extract the payload — watch **BigQuery's** `(...).result` struct access. |
-| `assert_wrappers_nonnull_*` (LIVE) | 0 rows | `<wrapper>_null` → that wrapper returned nothing on this account (bad endpoint/model var, content filter, unsupported warehouse tier). Cross-check the model var and the prerequisite (Databricks serverless / DBR 18.2+). |
-| `assert_signals_conform_*` (LIVE) | 0 rows | A row = `classify`'s normalized scalar label is null or off-taxonomy. Null → the per-engine unwrap is wrong (Snowflake `:labels[0]` / BigQuery `.<field>`) — see §6. Off-taxonomy → the model ignored the label set. |
-| `assert_extract_conforms_*` (LIVE) | 0 rows | A row = the flattened extract `signal` is null or off-taxonomy. Null → the `field` path is wrong for this engine's extract shape (Snowflake's `:response` envelope is unwrapped in the wrapper; if BigQuery returns null, its STRUCT field access is wrong). |
-| `assert_extract_grounded_*` (LIVE, behavioral) | 0 rows | A row = the model returned an evidence quote that is **not** in the source utterance (a hallucinated quote). This surfaces real extraction quality — it can legitimately fail if the model paraphrases instead of quoting verbatim; investigate the row before assuming a code bug. |
-| `assert_kb_*` (LIVE) | 0 rows | `bad_row_count` (≠20) or `missing_source_type` → `knowledge_base`'s union/normalization didn't run as expected on this engine. `null_lineage_or_shape` → a common-shape column (source_id / account_key / embedding / text / source_type) came out null. |
-| `assert_run_log_*` (LIVE) | 0 rows | `no_classify_row` → `log_ai_run`'s post-hook INSERT never landed (hook error / ordering). `bad_values` → `row_count`≠10, `est_tokens` null/≤0, or `run_at` null → a cross-engine cast/typing problem in the log INSERT (the classic BigQuery pitfall). |
-| `assert_versioned_*` (multi-run) | 0 rows at each version | `wrong_version` after the v2 run → the guard did **not** reprocess on a version bump (delta filter wasn't skipped). `bad_count_or_dupes` → the `unique_key` merge duplicated instead of replacing. |
+| `assert_eval_metrics` | 0 rows | `bad_accuracy` → `eval` math or `type_float` cast wrong on this engine. `bad_shape` → the full-outer-join label set changed. Metrics are exact (0.75 / 1.0 / 0.5) — any drift is a real bug, **not** float noise. |
+| `assert_grounded`, `grounded` generic | 0 rows | A returned row = a quote that is **not** a substring of its source after case/whitespace normalization → `contains`/`collapse_ws`/`norm_text` mis-rendered for this dialect (e.g. BigQuery raw-string regex, Snowflake's 4th-arg gotcha). |
+| `assert_conforms_catches` | 0 rows | `schema_enum` failed to resolve the taxonomy, or `IN (...)` list built wrong. |
+| `assert_search` (LIVE) | 0 rows | `wrong_count` ≠ 3 → `top_k`/`VECTOR_SEARCH` wiring off (watch **BigQuery's** divergent table-function path). `not_descending` → ordering/score sign wrong (BigQuery uses `1 - distance`). `score_out_of_range` → not cosine. `wrong_top_hit` → the near-identical utterance didn't rank #1 → **embedding quality / wrong embedding model**, or query embedded with a different model than the corpus. |
+| `assert_flatten_conforms` (LIVE) | 0 rows | A row = the flattened `signal` is null or off-taxonomy. Null → `field` path wrong for this engine's output shape (VARIANT `:` / STRUCT `.` / JSON `get_json_object`). Off-taxonomy value → the model ignored the schema (most likely on **BigQuery**, where the enum is prompt-constrained only, not schema-enforced). |
+| `assert_generate_text` (LIVE) | 0 rows | Empty/null text → `text` didn't extract the payload — watch **BigQuery's** `(...).result` struct access. |
+| `assert_wrappers_nonnull` (LIVE) | 0 rows | `<wrapper>_null` → that wrapper returned nothing on this account (bad endpoint/model var, content filter, unsupported warehouse tier). Cross-check the model var and the prerequisite (Databricks serverless / DBR 18.2+). |
+| `assert_signals_conform` (LIVE) | 0 rows | A row = `classify`'s normalized scalar label is null or off-taxonomy. Null → the per-engine unwrap is wrong (Snowflake `:labels[0]` / BigQuery `.<field>`) — see §6. Off-taxonomy → the model ignored the label set. |
+| `assert_extract_conforms` (LIVE) | 0 rows | A row = the flattened extract `signal` is null or off-taxonomy. Null → the `field` path is wrong for this engine's extract shape (Snowflake's `:response` envelope is unwrapped in the wrapper; if BigQuery returns null, its STRUCT field access is wrong). |
+| `assert_extract_grounded` (LIVE, behavioral) | 0 rows | A row = the model returned an evidence quote that is **not** in the source utterance (a hallucinated quote). This surfaces real extraction quality — it can legitimately fail if the model paraphrases instead of quoting verbatim; investigate the row before assuming a code bug. |
+| `assert_kb` (LIVE) | 0 rows | `bad_row_count` (≠20) or `missing_source_type` → `knowledge_base`'s union/normalization didn't run as expected on this engine. `null_lineage_or_shape` → a common-shape column (source_id / account_key / embedding / text / source_type) came out null. |
+| `assert_run_log` (LIVE) | 0 rows | `no_classify_row` → `log_ai_run`'s post-hook INSERT never landed (hook error / ordering). `bad_values` → `row_count`≠10, `est_tokens` null/≤0, or `run_at` null → a cross-engine cast/typing problem in the log INSERT (the classic BigQuery pitfall). |
+| `assert_versioned` (multi-run) | 0 rows at each version | `wrong_version` after the v2 run → the guard did **not** reprocess on a version bump (delta filter wasn't skipped). `bad_count_or_dupes` → the `unique_key` merge duplicated instead of replacing. |
 | `assert_run_log` (duckdb) | 0 rows | If it fails after a **repeat** build, it's the append-only log accumulating — rebuild with `--full-refresh` (see §2). |
 | `assert_content_hash_delta` (duckdb, multi-run, §4.3) | 0 rows | `wrong_row_count` ≠ 1 on the phase-2 run → the content-hash delta condition isn't isolating the single changed row (0 → frozen everything, 10 → reprocessed the whole corpus). `edited_row_not_reembedded` → the edited row's `embedded_at` didn't actually update, the delta predicate found it but the merge didn't touch it. |
 | `relationships_orphan_embeddings_chunk_id__...` (duckdb, multi-run, §4.4) | 0 rows normally; **expected to fail** after the deliberate re-chunk step | This is the one test in this file meant to fail on command. If it *doesn't* fail after §4.4's steps, the relationships test isn't actually catching the orphan. |
@@ -323,11 +332,11 @@ What remains uncovered or conditional (everything else is now covered on all thr
 - **The cloud suite is opt-in.** It runs only on manual `workflow_dispatch` (or locally against a
   profile), never on PR/push. On a normal change, the cloud AI paths are **parsed, not executed** —
   continuous coverage is the duckdb layer; cloud is validated on demand (that's what you're about to do).
-- **Some live tests are behavioral, not deterministic gates.** `assert_search_*` (top-hit ranking),
-  the `*_conforms_*` checks, and `assert_extract_grounded_*` depend on live model output, so they can
+- **Some live tests are behavioral, not deterministic gates.** `assert_search` (top-hit ranking),
+  the `*_conforms_*` checks, and `assert_extract_grounded` depend on live model output, so they can
   fail from model nondeterminism rather than a code bug. Read a failing row before assuming a regression.
 - **BigQuery classify/extract STRUCT field access is assumed-from-docs** (Snowflake + Databricks
-  shapes are confirmed as of 2026-07-29). `assert_signals_conform_bq` / `assert_extract_conforms_bq`
+  shapes are confirmed as of 2026-07-29). `assert_signals_conform` / `assert_extract_conforms` (on `--target bigquery`)
   are the confirmation — a **null** result means the `.<field>` path is wrong for BigQuery.
 - **BigQuery Vertex key casing** (`generationConfig`/`thinkingConfig`) — re-confirm on the first live
   BigQuery run.
@@ -351,8 +360,8 @@ What remains uncovered or conditional (everything else is now covered on all thr
 
 - Classify normalized and asserted.
 - Extract flattened, with conformance and evidence-groundedness asserted.
-- `knowledge_base` union exercised on cloud (`assert_kb_*`).
-- `log_ai_run` INSERT asserted on cloud (`assert_run_log_*`).
+- `knowledge_base` union exercised on cloud (`assert_kb`).
+- `log_ai_run` INSERT asserted on cloud (`assert_run_log`).
 - `version_guard` delta and bump run on all three warehouses (§4.1).
 - Content-hash delta and chunk_id orphaning run on all three warehouses (§4.3, §4.4).
 
@@ -360,10 +369,10 @@ What remains uncovered or conditional (everything else is now covered on all thr
 DEFERRED` until the next live-battery run):
 
 - `split_sentences` **cross-engine boundary parity** against a golden set
-  (`assert_split_adversarial_*`, catching the Snowflake divergence #7).
+  (`assert_split_adversarial`, catching the Snowflake divergence #7).
 - Prompt-literal **backslash** and enum-label **apostrophe** escaping, executed live via a classify
-  over an adversarial prompt/schema (`signals_adversarial_*`, #5/#6).
-- `knowledge_base` **heterogeneous timestamp** (DATE vs TIMESTAMP) union (`kb_hetero_*`, #8).
+  over an adversarial prompt/schema (`signals_adversarial`, #5/#6).
+- `knowledge_base` **heterogeneous timestamp** (DATE vs TIMESTAMP) union (`kb_hetero`, #8).
 
 **`log_ai_run` post-hook timing hazard, found and closed 2026-08-10 (§4.2):** `logged_filtered`
 deliberately used a static filter, by its own comment, to avoid needing cross-run sequencing, so no
@@ -386,8 +395,8 @@ dbt build --project-dir integration_tests/duckdb --profiles-dir integration_test
   --select guard_pass --vars '{max_batch_rows: 3}'
 
 # Structure gate for a cloud dialect (no creds; renders per-dialect SQL)
-dbt parse --project-dir integration_tests/bigquery --profiles-dir ci
+dbt parse --project-dir integration_tests/cloud --profiles-dir ci --target bigquery
 
 # Live battery on a real warehouse (needs ~/.dbt profile; costs money)
-dbt build --project-dir integration_tests/bigquery --full-refresh
+dbt build --project-dir integration_tests/cloud --target bigquery --full-refresh
 ```

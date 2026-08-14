@@ -4,13 +4,12 @@ config-version: 2
 
 # A cross-platform dbt package for context engineering — modeling data that AI agents
 # read — across Snowflake (Cortex), Databricks, and BigQuery.
-# See CLAUDE.md and docs/DESIGN_SPEC.md.
 
 require-dbt-version: [">=1.6.0", "<2.0.0"]
 
 profile: 'dbt_context_engineering'
 
-macro-paths: ["macros", "prompts"]  # prompts are versioned Jinja macros (DECISIONS.md D4)
+macro-paths: ["macros", "prompts"]  # prompts are versioned Jinja macros (ADR-0001)
 model-paths: ["models"]
 seed-paths: ["seeds"]
 test-paths: ["tests"]

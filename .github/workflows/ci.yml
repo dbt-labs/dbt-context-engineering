@@ -22,10 +22,10 @@ jobs:
       - name: verify embedding_logic_hash() is not stale
         run: python ci/verify_embedding_logic_hash.py
 
-  # Structure-only gate (DECISIONS.md D6): parse each integration-test project across all three
-  # dialects. `dbt parse` renders the wrapper dispatch (bigquery__/snowflake__/databricks__ impls)
-  # and validates refs/macros/config WITHOUT opening a warehouse connection — so no credentials are
-  # needed. (compile is NOT used here: it connects at startup on every cloud adapter.)
+  # Structure-only gate (ADR-0015): parse the single cloud integration-test project across
+  # all three targets. `dbt parse` renders the wrapper dispatch (bigquery__/snowflake__/databricks__
+  # impls) and validates refs/macros/config WITHOUT opening a warehouse connection — so no
+  # credentials are needed. (compile is NOT used here: it connects at startup on every cloud adapter.)
   structure:
     runs-on: ubuntu-latest
     strategy:
@@ -40,12 +40,12 @@ jobs:
       - name: Install dbt for ${{ matrix.adapter }}
         run: pip install "dbt-${{ matrix.adapter }}"
       - name: deps
-        run: dbt deps --project-dir integration_tests/${{ matrix.adapter }} --profiles-dir ci
+        run: dbt deps --project-dir integration_tests/cloud --profiles-dir ci
       - name: parse (renders wrapper dispatch; no warehouse connection)
-        run: dbt parse --project-dir integration_tests/${{ matrix.adapter }} --profiles-dir ci
+        run: dbt parse --project-dir integration_tests/cloud --profiles-dir ci --target ${{ matrix.adapter }}
 
   # Deterministic tests (chunking, guard, log) — executed on duckdb, no warehouse credentials
-  # needed (DECISIONS.md D6). This is the only job that truly compiles + runs + tests models.
+  # needed (ADR-0015). This is the only job that truly compiles + runs + tests models.
   deterministic-tests:
     runs-on: ubuntu-latest
     steps:
@@ -122,9 +122,10 @@ jobs:
             --select vg_adopt assert_vg_adopt --vars '{vg_legacy: false, vg_ver: v1}'
 
   # Live battery — OPT-IN (manual `workflow_dispatch` only; never runs on PR/push). Runs the full
-  # integration battery against real warehouses for all three adapters. Requires a repo secret
-  # DBT_PROFILES_YML holding the three profiles (jaffle-mcp-demo, bigquery, databricks). Every model
-  # is a plain table — no vector indexes or serving endpoints are created (search is brute-force).
+  # integration battery against real warehouses for all three targets of the single cloud project.
+  # Requires a repo secret DBT_PROFILES_YML holding the merged profile (dbt-context-engineering)
+  # with its snowflake/databricks/bigquery targets. Every model is a plain table — no vector
+  # indexes or serving endpoints are created (search is brute-force).
   live-battery:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
@@ -144,15 +145,15 @@ jobs:
           mkdir -p ~/.dbt
           printf '%s' "${{ secrets.DBT_PROFILES_YML }}" > ~/.dbt/profiles.yml
       - name: deps
-        run: dbt deps --project-dir integration_tests/${{ matrix.adapter }}
+        run: dbt deps --project-dir integration_tests/cloud
       - name: build battery (full-refresh)
-        run: dbt build --project-dir integration_tests/${{ matrix.adapter }} --full-refresh
+        run: dbt build --project-dir integration_tests/cloud --target ${{ matrix.adapter }} --full-refresh
       - name: version guard sequence — delta + version bump (real warehouse)
         # Sequential runs to exercise version_guard's delta vs. reprocess-all paths on the real
         # warehouse (the full-refresh build above only covers the first build). v1 again = delta;
         # v2 = version bump = reprocess all. Selected by tag so it works across adapters.
         run: |
-          dbt build --project-dir integration_tests/${{ matrix.adapter }} \
+          dbt build --project-dir integration_tests/cloud --target ${{ matrix.adapter }} \
             --select tag:version_guard --vars '{test_version: v1}'
-          dbt build --project-dir integration_tests/${{ matrix.adapter }} \
+          dbt build --project-dir integration_tests/cloud --target ${{ matrix.adapter }} \
             --select tag:version_guard --vars '{test_version: v2}'

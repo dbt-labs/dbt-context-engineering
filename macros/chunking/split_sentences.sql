@@ -1,5 +1,5 @@
 {#-
-  split_sentences — split a document's text into one row per sentence (DECISIONS.md D5, the
+  split_sentences — split a document's text into one row per sentence (ADR-0002, the
   deferred layer-1 splitter, now built). This is the STAGING half of chunking: cheap, deterministic,
   ZERO AI cost. Feed its output to chunk (unit = sentence, partition = document_id) to get the
   full "recursive splitter" pattern: (1) split text -> natural units [here]; (2) pack units into

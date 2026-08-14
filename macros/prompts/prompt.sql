@@ -1,7 +1,7 @@
 {#-
   prompt(name, version) -> prompt text for that name/version, as a compile-time literal.
 
-  D4 = macro library (DECISIONS.md). Each prompt version is a macro `prompt__<name>__<version>()`
+  Macro library, ADR-0001. Each prompt version is a macro `prompt__<name>__<version>()`
   on a macro path. Prompts may live EITHER in the calling dbt project OR in this package: the
   resolver looks the name up in dbt's flat macro namespace (`context`), which contains both, with
   the calling project winning on a name collision (so a project can override a packaged prompt). If

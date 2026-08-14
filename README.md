@@ -20,7 +20,7 @@ those systems read.
 
 ## Status
 
-Built **one phase at a time behind approval gates** — see `CLAUDE.md` and `tasks/`. Phase 0
+Built **one phase at a time behind approval gates.** Phase 0
 (scaffolding), Phase 1 (chunking — `chunk`), Phase 2 (AI function wrappers + prompt library +
 cost guard), Phase 3 (run log), Phase 4 (incremental pattern +
 `version_guard`), Phase 5 (retrieval — `vector_search` + opt-in `create_vector_index`),
@@ -30,8 +30,7 @@ calls (`generate`, `classify`, `extract`, `embed`, `vector_search`) have **execu
 successfully on all three engines** (Snowflake, Databricks, BigQuery) against mock sample data,
 alongside **full deterministic execution on duckdb** of chunking, prompt resolution/rendering, the
 cost guard, and the AI run log. Not yet validated: execution against real production data at
-scale, and cost reconciliation against engine usage tables (built, LIVE-VALIDATION DEFERRED). See
-`docs/DECISIONS.md`.
+scale, and cost reconciliation against engine usage tables (built, LIVE-VALIDATION DEFERRED).
 **How to run the tests in each environment — and what to check in the results — is in `TESTING.md`.**
 **Every macro is defined with its signature and usage in the [Macro reference](#macro-reference) below.**
 **The *why* behind each major design choice is recorded as ADRs in [`adr/`](adr/README.md).**
@@ -39,16 +38,9 @@ scale, and cost reconciliation against engine usage tables (built, LIVE-VALIDATI
 ## Repo map
 
 ```
-CLAUDE.md                  # operating contract for Claude Code — read first
-docs/
-  ARCHITECTURE.md          # ← start here: the whole package explained for newcomers
-  DESIGN_SPEC.md           # full design rationale
-  DECISIONS.md             # locked decisions + open items
-  PARITY.md                # engine-surface parity (reviewed release artifact)
-tasks/                     # phase-by-phase plan; one phase at a time, approval-gated
 macros/
   functions/               # generate/classify/extract/embed (adapter.dispatch) + prereq checks
-  prompts/                 # prompt / schema (macro-library loader, D4) + render_prompt
+  prompts/                 # prompt / schema (macro-library loader, ADR-0001) + render_prompt
   chunking/                # chunk (unit packing) + split_sentences (layer-1 splitter) + array_agg/string_agg
   metadata/                # attach_metadata (non-dispatched: join source-level metadata onto chunks)
   cost/                    # guard_batch (guard) / estimate_tokens / log_ai_run / complete_ai_run
@@ -59,7 +51,7 @@ macros/
   operations/              # create_vector_index (run-operation only)
   evaluation/              # grounded / conforms_to_schema / eval (+ contains/collapse_ws/norm_text/schema_enum)
 models/audit/              # ai_run_log (append-only usage/cost log)
-prompts/                   # prompt+schema library — one Jinja macro per name+version (D4)
+prompts/                   # prompt+schema library — one Jinja macro per name+version (ADR-0001)
 seeds/                     # synthetic fixtures (no real customer data)
 integration_tests/         # per-adapter (cloud) projects + duckdb/ (credential-free deterministic tests)
 ci/                        # structure-only CI profiles (placeholder creds) + verify_embedding_logic_hash.py
@@ -71,7 +63,7 @@ ci/                        # structure-only CI profiles (placeholder creds) + ve
 documents) into token-bounded chunks that never split a unit, never cross a partition key, and
 carry every unit's id into `source_rows` for lineage. Pure window SQL, deterministic, zero AI
 cost. Defaults: `chunk_target_tokens = 512`, `chunk_overlap_tokens = 0` (opt-in overlap).
-See `docs/DECISIONS.md` D5 and `tasks/phase-1a-chunking-design.md` for the algorithm + research.
+See ADR-0002 for the algorithm + research.
 
 ```sql
 -- Package macros are called qualified with the package name (dbt convention, like dbt_utils.*).
@@ -474,7 +466,7 @@ for drift tracking.
 
 All three are validated end to end on duckdb (both pass and catch directions). The only
 per-engine divergence is the containment / whitespace primitives (`contains`,
-`collapse_ws`), isolated behind dispatch — see `docs/PARITY.md`.
+`collapse_ws`), isolated behind dispatch — see ADR-0007.
 
 ## Macro reference
 
@@ -747,4 +739,4 @@ inferred. Key vars: `model_generate` / `model_classify` / `model_extract` and
 `max_output_tokens` and `bq_thinking_budget` (output-side cost control — the latter is
 BigQuery/Gemini-only, `0` disables billed "thinking"); `cost_per_1k_tokens` (for logged
 `est_cost`). BigQuery's `bq_connection` is **optional** (End-User Credentials cover interactive
-queries; the `AI.*` functions need no `CREATE MODEL` — see `docs/PARITY.md`).
+queries; the `AI.*` functions need no `CREATE MODEL`).

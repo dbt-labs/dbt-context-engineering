@@ -1,5 +1,5 @@
 {#-
-  chunk — pack ordered, atomic text UNITS into token-bounded chunks (spec §5.3, DECISIONS.md D5).
+  chunk — pack ordered, atomic text UNITS into token-bounded chunks (spec §5.3, ADR-0002).
 
   One operation for both use cases: a "unit" is one input row of text. For transcripts a unit
   is a turn (partition by call_id); for documents a unit is a sentence/paragraph (split upstream,

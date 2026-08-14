@@ -1,0 +1,55 @@
+version: 2
+
+models:
+  - name: orphan_chunks
+    description: >
+      chunk output over the synthetic transcript seed, var-driven target_tokens (oc_target_tokens)
+      so it can be rebuilt with a different chunking config to simulate a re-chunk. See
+      orphan_embeddings and ADR-0023's chunk_id orphaning discussion.
+    columns:
+      - name: chunk_id
+        tests: [unique, not_null]
+
+  - name: orphan_embeddings
+    description: >
+      Stand-in downstream "embedding" model keyed on chunk_id. The relationships test below proves
+      a chunk_id that orphan_chunks stops producing after a re-chunk is a loud, testable
+      failure rather than a silent, permanent gap in this table.
+    columns:
+      - name: chunk_id
+        tests:
+          - relationships:
+              to: ref('orphan_chunks')
+              field: chunk_id
+
+  - name: chunk_metadata_cols
+    description: "attach_metadata over chunk_docs (default in_text=False) — title/citation_url pass through as columns only."
+    columns:
+      - name: chunk_id
+        tests: [unique, not_null]
+      - name: title
+        tests: [not_null]
+      - name: citation_url
+        tests: [not_null]
+
+  - name: chunk_metadata_text
+    description: "attach_metadata over chunk_docs with in_text=True — same columns, plus the block prepended to chunk_text."
+    columns:
+      - name: chunk_id
+        tests: [unique, not_null]
+      - name: title
+        tests: [not_null]
+      - name: citation_url
+        tests: [not_null]
+
+  - name: chunk_metadata_utterances
+    description: "attach_metadata over chunk_utterances (transcripts), same macro and call shape as the docs models, pointed at a structurally different source."
+    columns:
+      - name: chunk_id
+        tests: [unique, not_null]
+      - name: customer
+        tests: [not_null]
+      - name: participants
+        tests: [not_null]
+      - name: recording_url
+        tests: [not_null]

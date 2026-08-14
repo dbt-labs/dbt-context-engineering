@@ -1,7 +1,7 @@
 {#-
   grounded — generic (schema.yml) test. Asserts each row's evidence/quote actually appears in
   its source-text column, so a hallucinated quote fails the build. The package already REQUIRES an
-  evidence field on extracted facts (CLAUDE.md); this is the check that the field is truthful.
+  evidence field on extracted facts (ADR-0011); this is the check that the field is truthful.
 
   Usage:
     columns:

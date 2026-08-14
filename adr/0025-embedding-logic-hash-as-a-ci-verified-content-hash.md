@@ -10,6 +10,41 @@ merged. The mechanism and decision are unchanged; only the identifier changed, b
 specifically to `embed()`'s call-graph closure. A future change to, say, `chunk()`'s logic would
 not move this hash at all, and the name now says so.
 
+Amended 2026-08-14: the "audit-only, gates nothing" decision below is correct *for a hash of
+source bytes*, and is unchanged. But it should not be read as "code identity has no place in the
+fingerprint" — only that *this* signal doesn't. The reason the source hash can't gate anything is
+that it hashes the wrong thing: comments and renames move it, so its false-positive rate forces the
+retreat to audit-only, and the detection gap this record documents (a genuinely vector-affecting
+change is recorded, not caught) reopens.
+
+The direction of travel is to hash the function's BEHAVIOR, not its source, and promote THAT into
+`embedding_fn_fingerprint` (ADR-0023) as a real input:
+
+- In this repo's CI, embed a small frozen probe set per engine and hash the returned vectors,
+  rounded to a float tolerance. This hash moves when — and only when — `embed()`'s output moves
+  for a fixed input. The Databricks `ARRAY<DOUBLE>` → `ARRAY<FLOAT>` cast that motivates this
+  record moves the probe vectors and is caught; a comment or rename leaves them identical and
+  correctly triggers nothing. Its ~zero false-positive rate is what lets it gate, where the source
+  hash can't. It ships through the same generated-literal + CI-verification mechanism this record
+  already builds; only the hashed input changes (observed vectors, not source bytes).
+- The source-bytes `embedding_logic_hash()` stays, re-scoped as a pre-merge tripwire: it still
+  forces a human to look whenever `embed()`'s closure changes at all (high recall), and the
+  behavioral hash decides whether that change actually reprocesses anything (high precision). Two
+  signals, two jobs.
+- Neither CI hash sees provider-side alias drift at consumer runtime (a floating model alias
+  silently re-resolving to a new snapshot). That is only observable where and when the alias
+  resolves, so it needs a runtime canary embed + test in the pipeline itself, not a compile-time
+  literal. Tracked separately.
+
+The "why not a git SHA / package version / container digest" analysis lives in the methodology
+note's "Code identity in the fingerprint" addendum: the package's own resolved SHA in
+`package-lock.yml` is not reachable from dbt's Jinja sandbox (no file I/O), and `DBT_CLOUD_GIT_SHA`
+is the consumer project's PR commit — the wrong repository, and absent on scheduled production
+runs. Source identity was never the right proxy; behavior is the thing itself.
+
+This amendment records direction, not a shipped mechanism; the decision below stands until the
+behavioral hash lands.
+
 ## Concept
 
 Code identity answers a question `content_hash` and `embedding_fn_fingerprint` (ADR-0023)

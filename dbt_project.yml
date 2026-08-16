@@ -64,10 +64,34 @@ vars:
   # Where the append-only AI run log is written (Phase 3).
   ai_run_log_relation: null
 
+  # embedding_canary (runtime drift monitor, ADR-0026). Minimum cosine similarity a live probe
+  # must retain against its blessed baseline. The same measure vector_search already uses to rank
+  # results (ADR-0005): a threshold here means "would this difference change a search result,"
+  # not an arbitrary count of float decimal places. Live measurement found the same probe embedded
+  # across separate connections lands on a small number of exact repeating vectors (not continuous
+  # jitter), scoring 0.999999-0.9999994 similarity against each other; 0.999 is a safety margin
+  # below that floor, not a value tuned to any observed real drift (none has been observed).
+  embedding_canary_similarity_threshold: 0.999
+  # Snowflake ONLY -- required when embedding_canary runs there. VECTOR's dimension is part of its
+  # type and Snowflake requires a literal there (confirmed live: a dynamic dimension expression is
+  # a syntax error), so the baseline's parsed-from-JSON vector needs this to know its own shape.
+  # Set to your embedding_model's known output dimension (e.g. 768 for snowflake-arctic-embed-m-v1.5).
+  embedding_canary_vector_dimension: null
+  # warn in prod (a benign wobble should not fail a scheduled build); CI overrides this to
+  # 'error' so a PR cannot merge past real drift.
+  embedding_canary_test_severity: warn
+
 models:
   dbt_context_engineering:
     audit:
       +materialized: table
+    # embedding_canary (ADR-0026) makes real embed() calls, real cost, on every build it's part
+    # of. Disabled by default so installing this package adds no automatic per-build spend; a
+    # consumer opts in with `monitoring: +enabled: true` and wires it into their own scheduled
+    # production job specifically (see README), not their default/dev build command, since the
+    # canary only catches provider drift by comparing runs spaced apart in time.
+    monitoring:
+      +enabled: false
 
 seeds:
   dbt_context_engineering:

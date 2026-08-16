@@ -468,6 +468,38 @@ All three are validated end to end on duckdb (both pass and catch directions). T
 per-engine divergence is the containment / whitespace primitives (`contains`,
 `collapse_ws`), isolated behind dispatch — see ADR-0007.
 
+## Runtime drift monitoring (`embedding_canary`)
+
+`embedding_fn_fingerprint` and `embedding_logic_hash` (above) catch a model/config change or a
+package-code change; neither can see a provider silently swapping a pinned model's behavior
+underneath an unchanged config, weeks after this package last shipped. `embedding_canary`
+re-embeds a small fixed probe set and compares it against a blessed baseline by **cosine
+similarity**, the same measure `vector_search` already uses to rank results, so that kind of
+drift shows up as a red test (`assert_embedding_canary_matches_baseline`) instead of something a
+human has to already suspect. See ADR-0026 for the full design, including the live measurement
+that ruled out an exact-match comparison (the same probe, re-embedded, lands on a small number of
+distinct vectors differing by a few thousandths, not one fixed value).
+
+**Disabled by default** (`monitoring: +enabled: false`). Installing this package adds no
+automatic cost; the canary makes real `embed()` calls every time it runs. To use it:
+
+```yaml
+# your dbt_project.yml
+models:
+  dbt_context_engineering:
+    monitoring:
+      +enabled: true
+```
+
+Then add `embedding_canary` (or `--select tag:embedding_canary`) to your **own scheduled
+production job**, not your default or dev build command. The canary only detects drift by
+comparing two runs spaced apart in time; running it on every ad-hoc dev build charges you the
+same `embed()` cost repeatedly without improving the odds of catching anything, since real drift
+happens on the provider's own schedule, not yours.
+
+On Snowflake, also set `embedding_canary_vector_dimension` to your `embedding_model`'s output
+dimension (`VECTOR`'s dimension is part of its type and Snowflake requires a literal there).
+
 ## Macro reference
 
 Every public object in the package. All are called **package-qualified**
@@ -739,4 +771,7 @@ inferred. Key vars: `model_generate` / `model_classify` / `model_extract` and
 `max_output_tokens` and `bq_thinking_budget` (output-side cost control — the latter is
 BigQuery/Gemini-only, `0` disables billed "thinking"); `cost_per_1k_tokens` (for logged
 `est_cost`). BigQuery's `bq_connection` is **optional** (End-User Credentials cover interactive
-queries; the `AI.*` functions need no `CREATE MODEL`).
+queries; the `AI.*` functions need no `CREATE MODEL`). `embedding_canary_similarity_threshold`
+(default `0.999`), `embedding_canary_test_severity` (default `warn`), and, Snowflake only,
+`embedding_canary_vector_dimension` (required, no default) configure the runtime drift monitor
+above; `monitoring: +enabled: true` in your own `dbt_project.yml` turns it on.

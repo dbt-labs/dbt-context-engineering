@@ -125,7 +125,9 @@ regenerate it" a blocked merge on this repo, not a silent gap anywhere.
 - **No new consumer-facing surface area.** Nothing about installing or upgrading this package
   changes; the literal ships as ordinary package source, exactly like every other macro.
 - Related: ADR-0023 (`embedding_fn_fingerprint`, the mechanical fingerprint this record's audit
-  column is deliberately excluded from).
+  column is deliberately excluded from). ADR-0026 (`embedding_canary`) closes the gap named in
+  Reasoning above. It is a runtime monitor for provider-side drift, complementing rather than
+  replacing this record's CI-time code-identity hash.
 
 ## Glossary
 

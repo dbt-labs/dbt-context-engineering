@@ -26,9 +26,13 @@ vars:
   # structured tasks. Ignored (var default none) on Snowflake/Databricks.
   bq_thinking_budget: 0
   # bq_connection: left unset on BigQuery — try the service-account / default path first.
+  # snowflake-arctic-embed-m-v1.5's output dimension (Snowflake only; embedding_canary's VECTOR cast needs a literal).
+  embedding_canary_vector_dimension: 768
 
 models:
   dbt_context_engineering:
     +enabled: false
     audit:
+      +enabled: true
+    monitoring:
       +enabled: true

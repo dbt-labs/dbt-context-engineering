@@ -80,9 +80,15 @@ against a committed baseline vector via `canary_cosine_similarity`, keyed by
   `vector_cosine_similarity` rejects the `ARRAY<DOUBLE>` `FROM_JSON` produces by default, the same
   cast `embed.sql` already documents for Databricks), `JSON_EXTRACT_ARRAY(...)` on BigQuery, and a
   fixed-size `::DOUBLE[n]` cast on duckdb.
-- **`embedding_canary_similarity_threshold = 0.999` by default.** Comfortably below every measured
-  noise score (0.999999-0.9999994) with real margin, not tuned to any observed real drift, since
-  none has been observed; see Consequences for what this margin does and doesn't establish.
+- **`embedding_canary_similarity_threshold = 0.999` by default.** Sits with real margin below
+  every measured noise score (0.999999-0.9999994) and below every measured real model-change
+  magnitude on every engine this package supports, spanning both cross-vendor swaps and
+  same-family version steps (see Consequences); not derived from either number by formula, but
+  confirmed to fall between them.
+- **`canary_calibration` (`integration_tests/duckdb/`) holds vectors at known cosine similarity
+  to a fixed reference**, so `assert_canary_calibration_sensitivity` asserts the threshold
+  actually trips where expected, independent of the duckdb stand-in's inability to test provider
+  drift (see Consequences).
 - **Four frozen probes.** A pangram, a short string, a long paragraph, and a unicode string,
   never edited once shipped, since editing one intentionally re-baselines it. Each gets its own
   baseline row, so an edge-case-specific drift (e.g. a tokenizer change that only touches
@@ -172,12 +178,41 @@ chance of running where it can actually catch something.
 - **The threshold is grounded in retrieval relevance, not an arbitrary precision count.** A
   reviewer questioning `0.999` can ask "would this magnitude of change move a search result,"
   a question with a real answer, instead of "why 6 decimals and not 4," a question with none.
-- **The threshold's lower bound is still, honestly, unverified.** Live measurement established
-  the noise ceiling (0.999999-0.9999994) and confirmed the *upper* bound works, a negative-control
-  test with a wildly wrong baseline vector is caught, but no real drift event has ever been
-  observed to confirm `0.999` sits above the noise and below anything that would actually matter.
-  This is the same honest limitation the hash design had, carried forward rather than resolved,
-  because no design choice here can manufacture an example of real drift to calibrate against.
+- **The threshold's lower bound is grounded in a measured real-model-change magnitude, not just
+  the noise ceiling, across two different kinds of change.** `print_embedding_canary_model_delta`
+  (`macros/operations/print_embedding_canary_model_delta.sql`) embeds the four frozen probes
+  under two named models and measures cosine similarity between them. **Cross-vendor swaps**
+  (different architecture and vendor entirely): Snowflake `snowflake-arctic-embed-m-v1.5` vs
+  `e5-base-v2` scores 0.2526-0.3125; Databricks `databricks-gte-large-en` vs
+  `databricks-bge-large-en` scores -0.0396-0.0055; BigQuery `text-embedding-005` vs
+  `text-multilingual-embedding-002` scores -0.0635-0.0470. **Same-family version steps** (the
+  same named model family, one version apart, tested where such a pair exists): Snowflake
+  `snowflake-arctic-embed-m-v1.5` vs `snowflake-arctic-embed-m` scores 0.2316-0.3857; BigQuery
+  `text-embedding-005` vs `text-embedding-004` scores -0.0405-0.0567. A same-family version step
+  scores no closer to identical than a cross-vendor swap does, on both engines tested both ways:
+  there is no observed middle ground between the noise ceiling (a replica of the exact same
+  weights) and a different training run of any kind, version step included. `0.999` sits with
+  three or more orders of magnitude of headroom above every measured point in either category.
+  Databricks has no same-family model pair available through its Foundation Model APIs
+  pay-per-token endpoints, so the version-step axis is untested there directly; its cross-vendor
+  number is the most extreme of the three engines measured, and the no-middle-ground pattern held
+  on both engines where it could be tested both ways, so nothing measured suggests Databricks is
+  an exception, though that conclusion for Databricks specifically is an inference from the other
+  two engines' pattern, not an independent measurement. A negative-control test with a wildly
+  wrong baseline vector confirms the upper bound the same way: similarity collapses and the test
+  fails as expected.
+- **None of the above measures a silently re-resolving alias with no name change at all**, the
+  exact scenario `embedding_canary` exists to catch. Every comparison compares two named,
+  deliberately different model identifiers; a provider quietly redeploying new weights behind an
+  unchanged alias cannot be reproduced on demand, only observed after the fact. This is a
+  permanent boundary of what calibration against named models can establish, not a gap expected
+  to close with further measurement.
+- **The comparison mechanism, separate from the provider-drift claim, is exercised in CI.**
+  `canary_calibration` fixtures (`integration_tests/duckdb/`) hold vectors at known cosine
+  similarity to a fixed reference (0.9999/0.999/0.99/0.95 vs `[1,2,3]`), so
+  `assert_canary_calibration_sensitivity` catches a sign flip, a broken threshold, or a
+  regression in `canary_cosine_similarity`'s own SQL. The duckdb stand-in still cannot test
+  provider drift (above): the mechanism is verified there; the provider is not.
 - **Re-blessing after an intended `embedding_fn_fingerprint` bump is one `run-operation` and one
   committed seed diff**, not a manual warehouse query assembled from scratch each time.
 - **Snowflake needs one explicit config value the other three engines don't**:

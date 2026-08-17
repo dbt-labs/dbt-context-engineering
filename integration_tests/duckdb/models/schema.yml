@@ -120,6 +120,18 @@ models:
       - name: citation_url
         tests: [not_null]
 
+  - name: canary_calibration
+    description: "Known-cosine fixtures (0.9999/0.999/0.99/0.95 vs [1,2,3]) for
+      canary_cosine_similarity (ADR-0026). assert_canary_calibration_sensitivity asserts both
+      numerical correctness and that embedding_canary_similarity_threshold trips where expected."
+    columns:
+      - name: probe_id
+        tests: [unique, not_null]
+      - name: expected_similarity
+        tests: [not_null]
+      - name: observed_similarity
+        tests: [not_null]
+
   - name: chunk_metadata_utterances
     description: "attach_metadata over chunk_utterances (transcripts, not documents) — same macro and call shape as chunk_metadata_cols, pointed at a structurally different source: customer/participants are frontmatter, recording_url is provenance."
     columns:

@@ -10,7 +10,9 @@ merged. The mechanism and decision are unchanged; only the identifier changed, b
 specifically to `embed()`'s call-graph closure. A future change to, say, `chunk()`'s logic would
 not move this hash at all, and the name now says so.
 
-Amended 2026-08-14: the "audit-only, gates nothing" decision below is correct *for a hash of
+Amended 2026-08-14 (**the behavioral-hash direction in this block was subsequently falsified by
+live measurement — read the 2026-08-17 amendment below before acting on any of it**): the
+"audit-only, gates nothing" decision below is correct *for a hash of
 source bytes*, and is unchanged. But it should not be read as "code identity has no place in the
 fingerprint" — only that *this* signal doesn't. The reason the source hash can't gate anything is
 that it hashes the wrong thing: comments and renames move it, so its false-positive rate forces the
@@ -42,8 +44,58 @@ note's "Code identity in the fingerprint" addendum: the package's own resolved S
 is the consumer project's PR commit — the wrong repository, and absent on scheduled production
 runs. Source identity was never the right proxy; behavior is the thing itself.
 
-This amendment records direction, not a shipped mechanism; the decision below stands until the
-behavioral hash lands.
+Amended 2026-08-17: **the behavioral-*hash* direction recorded above is falsified. It is superseded
+by [ADR-0026](0026-embedding-canary-runtime-drift-monitor.md), which solves the same problem with a
+continuous similarity threshold instead of a discrete hash.** The 2026-08-14 text is left in place
+as a record of the reasoning, not as guidance.
+
+What falsified it was measurement, not argument. Building the probe-hash mechanism and testing it
+live found that `embed()` **is not deterministic for a fixed input and a fixed model**: the same
+probe, re-embedded across separate connections, lands on a small number of exact, repeating vectors
+rather than one value — 2 distinct vectors across 8 Snowflake calls, 3 across 10 on Databricks,
+differing by up to **0.005 on a single element** (BigQuery showed none). This looks like routing
+across a pool of serving replicas, each internally deterministic but numerically slightly
+different. Two consequences follow, and each is independently fatal to the direction above:
+
+- **The rounding tolerance cannot work at all.** At the sketched four decimals the bucket width is
+  `1e-4`, so an observed 0.005 element delta is *fifty* buckets wide and flips that element's
+  rounded value on essentially every replica switch. Nor does coarsening rescue it: a hash is
+  discontinuous, so every one of ~1536 elements is an independent chance to straddle a bucket
+  edge, and the flip probability compounds with dimensionality while sensitivity to real change
+  falls away. There is no decimal count that is both stable against this noise and sensitive to
+  drift. The claim above that its "~zero false-positive rate is what lets it gate" is simply
+  wrong; the false-positive rate approaches one.
+- **A tolerance cannot live in a fingerprint even in principle.** `embedding_fn_fingerprint`
+  (ADR-0023) is a cache key compared by *exact equality*. "Equal within a tolerance" is not
+  expressible in one, so promoting any observed-behavior value into it was never available
+  regardless of the noise. And because the value would depend on which replica served CI, it
+  would not be a function of the code at all — which is the one property a code-identity signal
+  must have.
+
+The mechanism/semantics mismatch underneath both: a hash answers a **discrete** question ("are
+these bit-identical?"), while drift detection is inherently **continuous** ("did this change
+enough to matter?"). Rounding is an attempt to fake continuity with a discrete tool, and it fails
+exactly where those regimes meet. ADR-0026 uses cosine similarity instead — continuous by
+construction, so a threshold on it has a stable false-positive rate, and reusing `vector_search`'s
+own similarity functions grounds that threshold in "would this change a search result" rather than
+in a precision count that means nothing on its own.
+
+What survives from the 2026-08-14 amendment: the diagnosis that a source-bytes hash cannot gate
+because it hashes the wrong thing (unchanged, and still the reason this record's decision stands),
+and the third bullet's observation that provider-side alias drift needs a *runtime* check rather
+than a compile-time literal — which is precisely what ADR-0026 builds. The error was in the
+proposed remedy for the first point, not in either observation.
+
+For completeness: the only route to an equality-comparable behavioral fingerprint over a noisy
+vector is a locality-sensitive hash (sign bits of pinned random projections, which are stable
+under small perturbations). It is named here so the option is on the record, not recommended — it
+carries a nonzero bit-flip rate and a projection matrix that would itself have to be pinned and
+versioned, for a gating benefit ADR-0026's threshold already delivers without either.
+
+**Net effect on this record's Decision: none.** `embedding_logic_hash()` remains a CI-verified
+content hash of source bytes and remains audit-only. The 2026-08-14 amendment proposed eventually
+promoting a *different* signal into the fingerprint; that proposal is withdrawn, so the "audit
+column only" decision below is now unqualified rather than provisional.
 
 ## Concept
 
@@ -160,7 +212,9 @@ regenerate it" a blocked merge on this repo, not a silent gap anywhere.
 - **No new consumer-facing surface area.** Nothing about installing or upgrading this package
   changes; the literal ships as ordinary package source, exactly like every other macro.
 - Related: ADR-0023 (`embedding_fn_fingerprint`, the mechanical fingerprint this record's audit
-  column is deliberately excluded from). ADR-0026 (`embedding_canary`) closes the gap named in
+  column is deliberately excluded from); ADR-0026 (`embedding_canary`, which closes the runtime
+  provider-drift half of the detection gap this record names and declines to solve — see the
+  2026-08-17 amendment). ADR-0026 (`embedding_canary`) closes the gap named in
   Reasoning above. It is a runtime monitor for provider-side drift, complementing rather than
   replacing this record's CI-time code-identity hash.
 

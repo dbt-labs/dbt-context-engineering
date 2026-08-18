@@ -1,6 +1,9 @@
 {{ config(
     materialized='table',
-    post_hook="{{ dbt_context_engineering.log_ai_run('extract', model_name='filter-test', relation=ref('fixture_utterances'), input_column='utterance_text', filter='utterance_id > 5') }}"
+    post_hook=[
+        "{{ dbt_context_engineering.log_ai_run('extract', model_name='filter-test', relation=ref('fixture_utterances'), input_column='utterance_text', filter='utterance_id > 5') }}",
+        "{{ dbt_context_engineering.complete_ai_run('extract', model_name='filter-test') }}"
+    ]
 ) }}
 
 {#- Deterministic, single-build proof that log_ai_run's `filter` scopes the METER to the rows a run

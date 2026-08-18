@@ -3,8 +3,9 @@ models:
   - name: ai_run_log
     description: >
       Append-only log of every AI model run: model name, function, row count, estimated
-      tokens, estimated cost, timestamp, invocation id. Reconciled against engine usage
-      sources in Phase 3. Populated by log_ai_run (post-hook).
+      tokens, estimated cost, timestamp, invocation id, and a completed flag. Reconciled against
+      engine usage sources in Phase 3. Populated by log_ai_run (pre-hook or post-hook) and
+      complete_ai_run (post-hook); see completed below for the lifecycle.
     columns:
       - name: invocation_id
         description: dbt invocation id for the run that produced the row.
@@ -20,3 +21,11 @@ models:
         description: Estimated cost; corrected against actuals by the reconciliation view.
       - name: run_at
         description: Run timestamp.
+      - name: completed
+        description: >
+          False when log_ai_run inserts the row; the model's AI call is about to run (or is
+          running). True once complete_ai_run's post-hook confirms the model finished
+          successfully. Stays false if the model errored, was canceled, or otherwise never
+          reached its post-hook — dbt never runs a model's post-hook when it errors.
+        tests:
+          - not_null

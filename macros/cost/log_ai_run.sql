@@ -1,22 +1,66 @@
 {#-
-  log_ai_run — post-hook that appends one row to ai_run_log per AI model run (spec §5.4).
+  log_ai_run: appends one row to ai_run_log per AI model run (spec §5.4). Creates ai_run_log
+  itself, via ensure_ai_run_log_exists(), the first time it runs against a target where the table
+  does not exist yet, so this hook still works on a `dbt run --select <single_model>` that never
+  builds ai_run_log directly.
 
-  Usage (post-hook on any AI model):
+  The inserted row starts at completed = false. Pair with complete_ai_run(), as a post_hook using
+  the SAME function_name/model_name, to flip that row to true once the model finishes successfully.
+  A model that errors mid-run never reaches its post_hook, so its row simply stays false.
+
+  Which hook phase to use depends on what `relation`/`filter` actually reference, not on
+  preference, because `this` means something different before vs. after the model's own
+  build/merge runs. Three cases:
+
+  1. `relation` is an explicit ref() to some OTHER table, and `filter` (if any) doesn't reference
+     `this` (e.g. sizing from a source table). Either pre_hook or post_hook works; that other
+     table's state doesn't depend on THIS model's build.
+
+  2. `relation` left at its default (`this`), sizing from the model's OWN output, no `filter`.
+     Requires a POST_HOOK. Pre_hook runs before the create/merge statement, so `this` doesn't
+     exist yet on a first build (errors: table does not exist) and holds last run's stale state
+     on later builds either way. Only sound on a `table` (or always-fully-rebuilt) materialization,
+     where "the freshly built output" and "this run's batch" are the same thing.
+
+  3. `filter` derived from `this` (e.g. incremental_delta_predicate, which expands to
+     `<unique_key> not in (select <unique_key> from {{ this }})`), the delta-scoping pattern on
+     an INCREMENTAL model. Requires a PRE_HOOK. By the time a post_hook fires, this run's merge
+     has already landed the new rows into `this`, so that same predicate finds nothing and logs
+     row_count = 0 for a run that really processed rows.
+
+  Never combine case 2 with an incremental model (unfiltered relation=this on an incremental); it
+  is wrong in BOTH phases, not risky in just one. Pre_hook reports last run's state, missing this
+  run's rows entirely. Post_hook reports the whole cumulative table, every row ever merged in, not
+  this run's batch. Cases 2 and 3 can look like opposite rules for "using `this`", but they answer
+  different questions (the model's total current output, vs. which rows are new this run), and
+  only case 3's question has a sane answer on an incremental model.
+
+  Usage (case 1, explicit relation, safe as either a pre_hook or post_hook):
     {{ config(post_hook = "{{ log_ai_run('classify', model_name='claude-3-5-sonnet',
                                             relation=ref('my_inputs'), input_column='text_col') }}") }}
 
+  Usage (case 3, incremental delta, PRE_HOOK only):
+    {{ config(materialized='incremental', unique_key='doc_id',
+       pre_hook = [
+         "{{ guard_batch(ref('stg_docs'), 'body', filter=incremental_delta_predicate('doc_id')) }}",
+         "{{ log_ai_run('embed', relation=ref('stg_docs'), input_column='body',
+                          filter=incremental_delta_predicate('doc_id')) }}"
+       ]) }}
+
   Args:
-    function_name  which  function issued the call (generate/classify/extract/embed). Required.
-    model_name     the AI model used (the largest cost lever; always logged). Optional.
-    relation       relation to size the batch from. Defaults to `this` (the built model).
+    function_name  which function issued the call (generate/classify/extract/embed). Required.
+    model_name     the AI model used (the largest cost lever, always logged). Optional.
+    relation       relation to size the batch from. Defaults to `this` (the built model); see
+                   case 2 above, only sound on a fully-rebuilt materialization, as a post_hook.
     input_column   text column for the token estimate. If omitted, est_tokens/est_cost are null.
     filter         optional SQL predicate scoping the count to the rows the run ACTUALLY processed.
                    On an incremental model the body only touches the delta, so without this the log
-                   records the whole corpus every run (row_count/est_tokens/est_cost off by orders of
-                   magnitude). Pass the SAME predicate the body uses — incremental_delta_predicate()
-                   gives all three (body / guard_batch / here) one source of truth. Sizing from `this`
-                   (the default) also requires that `input_column` exists in the model's OUTPUT — pass
-                   relation=ref('<source>') when the source column isn't carried into the output.
+                   records the whole corpus every run (row_count/est_tokens/est_cost off by orders
+                   of magnitude). Pass the SAME predicate the body uses; incremental_delta_predicate()
+                   gives all three (body / guard_batch / here) one source of truth; see case 3
+                   above. Sizing from `this` (the default) also requires that `input_column` exists
+                   in the model's OUTPUT; pass relation=ref('<source>') when the source column
+                   isn't carried into the output.
 
   est_cost = est_tokens / 1000 * var('cost_per_1k_tokens') when both are available; otherwise
   null (left null when no price var is set).
@@ -42,8 +86,10 @@
         {%- set cost_expr = "cast(null as " ~ num_t ~ ")" -%}
     {%- endif -%}
 
+    {{ dbt_context_engineering.ensure_ai_run_log_exists() }}
+
     insert into {{ ref('ai_run_log') }}
-        (invocation_id, model_name, function_name, row_count, est_tokens, est_cost, run_at)
+        (invocation_id, model_name, function_name, row_count, est_tokens, est_cost, run_at, completed)
     select
         '{{ invocation_id }}',
         {{ model_sql }},
@@ -53,7 +99,8 @@
         {{ tokens_expr }},
         {{ cost_expr }},
         {#- cast to the column's type: Snowflake current_timestamp is TZ-aware but run_at is NTZ -#}
-        cast({{ dbt.current_timestamp() }} as {{ dbt.type_timestamp() }})
+        cast({{ dbt.current_timestamp() }} as {{ dbt.type_timestamp() }}),
+        false
     from (select {{ sz_select }} from {{ rel }}
         {%- if filter is not none and filter | trim != '' %}
         where {{ filter }}

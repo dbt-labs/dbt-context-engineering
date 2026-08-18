@@ -3,7 +3,7 @@
 -- 'filter-test'. Its log row_count/est_tokens must equal the FILTERED aggregates, not the full-seed
 -- aggregates. Fail rows only — a regression to whole-relation metering (row_count=10) fails here.
 with logged as (
-    select row_count, est_tokens
+    select row_count, est_tokens, completed
     from {{ ref('ai_run_log') }}
     where invocation_id = '{{ invocation_id }}' and model_name = 'filter-test'
 ),
@@ -18,3 +18,4 @@ select 'log_not_scoped_to_filter' as issue
 from logged l, expected e
 where l.row_count <> e.row_count
    or l.est_tokens <> e.est_tokens
+   or l.completed <> true

@@ -51,7 +51,8 @@ macros/
   prompts/                 # prompt / schema (macro-library loader, D4) + render_prompt
   chunking/                # chunk (unit packing) + split_sentences (layer-1 splitter) + array_agg/string_agg
   metadata/                # attach_metadata (non-dispatched: join source-level metadata onto chunks)
-  cost/                    # guard_batch (guard) / estimate_tokens / log_ai_run
+  cost/                    # guard_batch (guard) / estimate_tokens / log_ai_run / complete_ai_run
+  audit/                   # ai_run_log_columns_sql / ensure_ai_run_log_exists
   incremental/             # version_guard
   retrieval/               # vector_search
   operations/              # create_vector_index (run-operation only)
@@ -221,11 +222,14 @@ The full pattern — process only new rows, re-embed on a version bump, guard co
 {{ config(
     materialized  = 'incremental',
     unique_key    = 'doc_id',
-    pre_hook      = "{{ dbt_context_engineering.guard_batch(ref('stg_docs'), 'body',
-                        filter=dbt_context_engineering.incremental_delta_predicate('doc_id', var('embedding_model'))) }}",
-    post_hook     = "{{ dbt_context_engineering.log_ai_run('embed', model_name=var('embedding_model'),
-                        relation=ref('stg_docs'), input_column='body',
-                        filter=dbt_context_engineering.incremental_delta_predicate('doc_id', var('embedding_model'))) }}"
+    pre_hook      = [
+        "{{ dbt_context_engineering.guard_batch(ref('stg_docs'), 'body',
+            filter=dbt_context_engineering.incremental_delta_predicate('doc_id', var('embedding_model'))) }}",
+        "{{ dbt_context_engineering.log_ai_run('embed', model_name=var('embedding_model'),
+            relation=ref('stg_docs'), input_column='body',
+            filter=dbt_context_engineering.incremental_delta_predicate('doc_id', var('embedding_model'))) }}"
+    ],
+    post_hook     = "{{ dbt_context_engineering.complete_ai_run('embed', model_name=var('embedding_model')) }}"
 ) }}
 {% set delta = dbt_context_engineering.incremental_delta_predicate('doc_id', var('embedding_model')) %}
 select
@@ -238,20 +242,55 @@ from {{ ref('stg_docs') }}
 ```
 
 `version_guard` returns True (reprocess all) on first build, `--full-refresh`, or when the
-stored `model_version` differs from the pinned one — so a model/embedding-version bump re-embeds
+stored `model_version` differs from the pinned one, so a model/embedding-version bump re-embeds
 the whole corpus, and the `unique_key` merge replaces the old rows. No custom materialization.
 
-**Guard AND log the delta, not the corpus — from one source of truth.** The body's `where`, the
+**Guard AND log the delta, not the corpus, from one source of truth.** The body's `where`, the
 guard's `filter`, and the log's `filter` must all describe the same batch, or they drift.
 `incremental_delta_predicate('doc_id', var('embedding_model'))` returns that predicate once (or
 `none` when the whole corpus reruns), so all three agree. Without it: the guard counts the full
 source and, once the corpus passes `max_batch_rows`, every incremental run false-trips even for a
 few new rows; and the log records the whole corpus every run, so `row_count`/`est_cost` are wrong
-by orders of magnitude. Note the post-hook meters `relation=ref('stg_docs')`, **not** `this` — the
-token estimate reads `body`, which exists in the source but not in this model's output
-(`doc_id, model_version, embedding`); metering `this` here would error *after* the embed spend.
-`this`, `is_incremental()`, and `version_guard()` all resolve inside pre-/post-hooks — verified on
-duckdb (`guard_delta`, `logged_filtered`, and their CI steps).
+by orders of magnitude.
+
+**Which hook phase `log_ai_run` needs depends on what `relation`/`filter` actually reference, not
+on preference.** Three cases:
+
+1. `relation` is an explicit ref() to some OTHER table (a source, not `this`), and `filter` (if
+   any) doesn't reference `this`. Either pre-hook or post-hook works; that other table's state
+   doesn't depend on THIS model's build.
+2. `relation` left at its default (`this`), sizing from the model's OWN output, no `filter`.
+   Requires a post-hook. Pre-hook runs before the create/merge, so `this` doesn't exist yet on a
+   first build (errors) and holds last run's stale state on later builds either way. Only sound
+   on a `table` (or always-fully-rebuilt) materialization, where "the freshly built output" and
+   "this run's batch" are the same thing.
+3. `filter` derived from `this` (e.g. `incremental_delta_predicate`, which expands to
+   `<unique_key> not in (select <unique_key> from {{ this }})`), the delta-scoping pattern on an
+   incremental model. Requires a pre-hook. By the time a post-hook fires, this run's merge has
+   already landed the new rows into `this`, so that same predicate finds nothing and logs
+   `row_count = 0` for a run that really processed rows.
+
+The example above is case 3, so `guard_batch` and `log_ai_run` both run as pre-hooks, in the same
+phase as each other and as the model body's own delta `where`, all reading the same pre-merge
+state. Never combine case 2 with an incremental model (unfiltered `relation=this` on an
+incremental); it's wrong in both phases, not risky in just one. Pre-hook reports last run's
+state, missing this run's rows entirely. Post-hook reports the whole cumulative table, every row
+ever merged in, not this run's batch.
+
+Note the pre-hook meters `relation=ref('stg_docs')`, not `this`; the token estimate reads `body`,
+which exists in the source but not in this model's output (`doc_id, model_version, embedding`).
+`this`, `is_incremental()`, and `version_guard()` all resolve inside pre-/post-hooks, verified on
+duckdb (`guard_delta`, `logged_filtered`, and `logged_incremental_delta`, which exercises the
+exact two-build, real-delta scenario above end to end).
+
+**`ai_run_log` tracks each row's lifecycle in a `completed` boolean.** `false` when `log_ai_run`
+inserts it, flipped to `true` once `complete_ai_run`'s post-hook confirms the model finished. If
+the model errors before reaching that post-hook, the row simply stays `false`. `complete_ai_run`
+is always safe as a post-hook, even when `log_ai_run` runs as a pre-hook per the rule above; its
+`UPDATE` is keyed on `invocation_id`/`function_name`/`model_name`, never on `this`. `log_ai_run`
+also creates `ai_run_log` itself the first time it fires against a target that doesn't have it
+yet, so a `dbt run --select <one_model>` that never selects `ai_run_log` still has somewhere to
+write.
 
 ## Retrieval (Phase 5)
 
@@ -408,7 +447,10 @@ is pinned via `embedding_model` (a corpus embedded by one model can't be searche
 -- classify (scalar label) + guard + log, the governed pattern
 {{ config(
   pre_hook  = "{{ dbt_context_engineering.guard_batch(ref('stg'), 'text') }}",
-  post_hook = "{{ dbt_context_engineering.log_ai_run('classify', model_name=var('model_classify'), relation=ref('stg'), input_column='text') }}"
+  post_hook = [
+    "{{ dbt_context_engineering.log_ai_run('classify', model_name=var('model_classify'), relation=ref('stg'), input_column='text') }}",
+    "{{ dbt_context_engineering.complete_ai_run('classify', model_name=var('model_classify')) }}"
+  ]
 ) }}
 select id,
   {{ dbt_context_engineering.classify('text',
@@ -470,13 +512,21 @@ rows + estimated tokens of the input and **raises before the model runs** if it 
 **`estimate_tokens(text_expression)`** — a SQL expression estimating tokens (`ceil(len/4)`), no
 AI. Shared by the guard and the log.
 
-**`log_ai_run(function_name, model_name=none, relation=none, input_column=none, filter=none)`** —
-**post-hook** that appends one row (model, function, row count, est tokens/cost, timestamp,
-invocation id) to the `ai_run_log` model. `relation` defaults to `this`; on an incremental model
-pass `filter` so it records the delta, not the whole corpus, and set `relation` to the source when
-`input_column` isn't carried into the model's output.
+**`log_ai_run(function_name, model_name=none, relation=none, input_column=none, filter=none)`**,
+pre-hook or post-hook (see its docstring for the rule on which), appends one row (model, function,
+row count, est tokens/cost, timestamp, invocation id, `completed=false`) to the `ai_run_log`
+model. `relation` defaults to `this`; on an incremental model pass `filter` so it records the
+delta, not the whole corpus, and set `relation` to the source when `input_column` isn't carried
+into the model's output. Creates `ai_run_log` itself the first time it fires against a target
+that doesn't have it yet.
 
-**`ai_run_log`** *(model)* — the append-only incremental usage/cost log the post-hook writes to.
+**`complete_ai_run(function_name, model_name=none)`**, always safe as a post-hook regardless of
+where `log_ai_run` runs. Flips the row `log_ai_run` inserted this invocation from `completed=false`
+to `true`, matched on `invocation_id`/`function_name`/`model_name`. Pass it the same
+`function_name`/`model_name` given to the paired `log_ai_run` call.
+
+**`ai_run_log`** *(model)*, the append-only incremental usage/cost log `log_ai_run` writes to.
+Its `completed` column is `false` until `complete_ai_run` confirms the model finished, see above.
 
 ### Incremental / versioning
 

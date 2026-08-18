@@ -37,6 +37,10 @@ just record the choice.
 | [0020](0020-run-log-standin-duckdb-only.md) | The no-AI run-log stand-in exists only on the duckdb tier | Accepted |
 | [0021](0021-run-completion-as-a-boolean-set-by-its-own-post-hook.md) | Run completion tracked as a boolean, set only by its own post-hook | Accepted |
 | [0022](0022-log-ai-run-hook-phase-follows-what-this-means.md) | `log_ai_run`'s hook phase follows what `this` means to the call | Accepted |
+| [0023](0023-embedding-metadata-and-content-hash-delta.md) | Embedding metadata as a cache key, content-hash delta layered onto `version_guard` | Accepted |
+| [0024](0024-inline-embedding-storage-over-a-side-table.md) | Inline embedding storage, a side table considered and declined | Accepted |
+| [0025](0025-embedding-logic-hash-as-a-ci-verified-content-hash.md) | `embedding_logic_hash` as a CI-verified content hash, not a version string or an env var | Accepted |
+| [0026](0026-embedding-canary-runtime-drift-monitor.md) | `embedding_canary`: a runtime drift monitor, complementing `embedding_logic_hash` | Accepted |
 
 ## New here? A reading path
 
@@ -61,6 +65,10 @@ of the discipline.
 4. **Making it affordable, correct, and trustworthy** — the governance that makes it production-grade.
    - [0003](0003-cost-as-a-first-class-output.md) — cost (the token economy, guard + log)
    - [0004](0004-version-aware-incremental-refresh.md) — version-aware incremental refresh
+   - [0023](0023-embedding-metadata-and-content-hash-delta.md), embedding metadata as a cache key, and the content-hash delta 0004's version check alone can't see
+   - [0024](0024-inline-embedding-storage-over-a-side-table.md), inline vs. side-table vector storage
+   - [0025](0025-embedding-logic-hash-as-a-ci-verified-content-hash.md), code identity as a CI-verified hash, not a version string
+   - [0026](0026-embedding-canary-runtime-drift-monitor.md), a runtime canary catching provider drift 0025's CI-time hash can't see
    - [0011](0011-lineage-and-citations-as-a-first-class-invariant.md) — lineage & citations end to end
    - [0007](0007-context-evaluation-and-groundedness.md) — evaluation & groundedness
    - [0009](0009-portable-enum-enforcement-via-prompt-injection.md) — portable enum enforcement

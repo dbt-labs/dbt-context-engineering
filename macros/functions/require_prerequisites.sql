@@ -7,8 +7,8 @@
 -#}
 
 {% macro require_bq_model() -%}
-    {#- ADVISORY, does not raise (relaxed after research — see docs/PARITY.md divergence #1).
-        The AI.* GA functions (AI.GENERATE, AI.EMBED, ...) that * emit call a Gemini endpoint
+    {#- ADVISORY, does not raise (relaxed after research). The AI.* GA functions (AI.GENERATE,
+        AI.EMBED, ...) that * emit call a Gemini endpoint
         directly: NO CREATE MODEL object is required, and bq_connection is OPTIONAL (End-User
         Credentials cover interactive queries; a connection is only needed for service-account /
         long-running / batch jobs). The wrappers pass connection_id only when bq_connection is

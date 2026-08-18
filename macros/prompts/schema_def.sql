@@ -2,7 +2,7 @@
   schema(name, version) -> output JSON schema (string) for that name/version, as a
   compile-time literal.
 
-  D4 = macro library (see prompt.sql, DECISIONS.md). Each schema version is a macro
+  Macro library, ADR-0001 (see prompt.sql). Each schema version is a macro
   `schema__<name>__<version>()` beside its prompt on a macro path. The schema is the taxonomy:
   enums are the allowed labels, and it should require an evidence/quote field so each extracted fact
   carries its source text. Like prompt, schemas may live in the calling project OR in this

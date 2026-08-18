@@ -59,5 +59,5 @@ create or replace vector index {{ name }}
     {{ exceptions.raise_compiler_error(
         "create_vector_index: Databricks Vector Search indexes are created via the Vector Search "
         ~ "API/SDK (Delta Sync or Direct Vector index), not SQL DDL. Create the endpoint + index "
-        ~ "there, then query with vector_search. See docs/PARITY.md.") }}
+        ~ "there, then query with vector_search. See ADR-0005.") }}
 {%- endmacro %}

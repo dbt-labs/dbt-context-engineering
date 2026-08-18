@@ -1,0 +1,38 @@
+name: 'cloud_tests'
+version: '1.0.0'
+config-version: 2
+
+# Live cloud-warehouse integration tests. One project, three targets — snowflake (Cortex),
+# databricks, bigquery — selected via `dbt run --target`. Uses the user's ~/.dbt
+# profile 'dbt-context-engineering'.
+# This RUNS REAL AI CALLS (small cost) once the AI models are executed.
+profile: 'dbt-context-engineering'
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+test-paths: ["tests"]
+target-path: "target"
+clean-targets: ["target", "dbt_packages"]
+
+vars:
+  # Per-warehouse model endpoints (region/workspace-dependent; adjust if unavailable).
+  model_generate: "{{ 'mistral-large2' if target.type == 'snowflake' else 'databricks-claude-haiku-4-5' if target.type == 'databricks' else 'gemini-2.5-flash' }}"
+  embedding_model: "{{ 'snowflake-arctic-embed-m-v1.5' if target.type == 'snowflake' else 'databricks-gte-large-en' if target.type == 'databricks' else 'text-embedding-005' }}"
+  chunk_target_tokens: 512
+  chunk_overlap_tokens: 0
+  # Output cap on generate (AI_COMPLETE/ai_query max_tokens). No thinking knob on Cortex/Databricks.
+  max_output_tokens: 1024
+  # BigQuery AI.* thinking budget — cuts Gemini 2.5 Flash's default thinking output for these
+  # structured tasks. Ignored (var default none) on Snowflake/Databricks.
+  bq_thinking_budget: 0
+  # bq_connection: left unset on BigQuery — try the service-account / default path first.
+  # snowflake-arctic-embed-m-v1.5's output dimension (Snowflake only; embedding_canary's VECTOR cast needs a literal).
+  embedding_canary_vector_dimension: 768
+
+models:
+  dbt_context_engineering:
+    +enabled: false
+    audit:
+      +enabled: true
+    monitoring:
+      +enabled: true

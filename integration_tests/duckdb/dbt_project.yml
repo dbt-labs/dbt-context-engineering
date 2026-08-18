@@ -2,10 +2,10 @@ name: 'duckdb_tests'
 version: '1.0.0'
 config-version: 2
 
-# Credential-free deterministic test project (DECISIONS.md D6). duckdb executes the chunking
+# Credential-free deterministic test project (ADR-0015). duckdb executes the chunking
 # SQL locally so Phase 1 chunking is really validated, not just compiled. Consumes the package
 # above as a local dependency.
-profile: 'duckdb_tests'
+profile: 'dbt-context-engineering'
 
 model-paths: ["models"]
 seed-paths: ["seeds"]
@@ -18,8 +18,11 @@ vars:
   chunk_overlap_tokens: 0
 
 models:
-  # The package's own models are disabled here except the audit log, which Phase 3 exercises.
+  # The package's own models are disabled here except the audit log (Phase 3) and the
+  # embedding_canary monitor, which duckdb exercises for hash/baseline/re-bless plumbing only.
   dbt_context_engineering:
     +enabled: false
     audit:
+      +enabled: true
+    monitoring:
       +enabled: true

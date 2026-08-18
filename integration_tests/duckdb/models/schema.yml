@@ -1,6 +1,27 @@
 version: 2
 
 models:
+  - name: orphan_chunks
+    description: >
+      chunk output over the synthetic transcript seed, var-driven target_tokens (oc_target_tokens)
+      specifically so it can be rebuilt with a different chunking config to simulate a re-chunk.
+      See orphan_embeddings and ADR-0023's chunk_id orphaning discussion.
+    columns:
+      - name: chunk_id
+        tests: [unique, not_null]
+
+  - name: orphan_embeddings
+    description: >
+      Stand-in downstream "embedding" model keyed on chunk_id. The relationships test below is the
+      actual point of this fixture: it proves a chunk_id that orphan_chunks stops producing after a
+      re-chunk is a loud, testable failure rather than a silent, permanent gap in this table.
+    columns:
+      - name: chunk_id
+        tests:
+          - relationships:
+              to: ref('orphan_chunks')
+              field: chunk_id
+
   - name: chunk_utterances
     description: "chunk output over the synthetic transcript seed (target_tokens=40)."
     columns:
@@ -97,6 +118,18 @@ models:
       - name: title
         tests: [not_null]
       - name: citation_url
+        tests: [not_null]
+
+  - name: canary_calibration
+    description: "Known-cosine fixtures (0.9999/0.999/0.99/0.95 vs [1,2,3]) for
+      canary_cosine_similarity (ADR-0026). assert_canary_calibration_sensitivity asserts both
+      numerical correctness and that embedding_canary_similarity_threshold trips where expected."
+    columns:
+      - name: probe_id
+        tests: [unique, not_null]
+      - name: expected_similarity
+        tests: [not_null]
+      - name: observed_similarity
         tests: [not_null]
 
   - name: chunk_metadata_utterances

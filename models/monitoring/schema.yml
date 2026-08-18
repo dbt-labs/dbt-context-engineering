@@ -1,0 +1,46 @@
+version: 2
+models:
+  - name: embedding_canary
+    description: >
+      Runtime drift monitor: embeds a fixed 4-probe set every build and keeps the raw vector,
+      compared against embedding_canary_baseline via cosine similarity
+      (assert_embedding_canary_matches_baseline), so a provider-side change that only manifests
+      in a live warehouse (e.g. a floating model alias re-resolving to a new snapshot) turns into
+      a red test instead of something a human has to already suspect. Complements, does not
+      replace, embedding_logic_hash's CI-time golden-vector hash (ADR-0025). On duckdb, embedding
+      is a fixed stand-in literal (no embed() implementation exists there) -- a green duckdb
+      canary verifies the hash/baseline/re-bless plumbing only, not provider drift. See ADR-0026
+      for the full design rationale.
+    columns:
+      - name: probe_id
+        description: Stable slug identifying which of the four frozen probe strings this row is.
+        tests:
+          - not_null
+      - name: probe_text
+        description: >
+          The frozen probe text itself, carried through for human review of baseline diffs.
+          Never edit an existing probe's text -- that re-baselines on purpose.
+      - name: model_version
+        description: >
+          The embedding model used (var embedding_model), or the fixed stand-in identifier on
+          duckdb, where no real embedding model exists.
+      - name: embedding_fn_fingerprint
+        description: >
+          embedding_fn_fingerprint() for this probe's embed() call. A fingerprint bump is an
+          intended function change; the baseline join on this column means the old baseline
+          simply stops matching rather than failing.
+      - name: observed_at
+        description: This build's run_started_at.
+      - name: embedding
+        description: >
+          The raw observed vector, compared against embedding_canary_baseline.baseline_vector via
+          canary_cosine_similarity in assert_embedding_canary_matches_baseline.
+        tests:
+          - not_null
+      - name: adapter
+        description: >
+          The warehouse this row was built on. Embeddings from different adapters use different
+          models and dimensions, so this discriminates baselines per adapter and keeps them from
+          ever being compared across engines.
+        tests:
+          - not_null

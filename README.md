@@ -20,7 +20,7 @@ those systems read.
 
 ## Status
 
-Built **one phase at a time behind approval gates** — see `CLAUDE.md` and `tasks/`. Phase 0
+Built **one phase at a time behind approval gates.** Phase 0
 (scaffolding), Phase 1 (chunking — `chunk`), Phase 2 (AI function wrappers + prompt library +
 cost guard), Phase 3 (run log), Phase 4 (incremental pattern +
 `version_guard`), Phase 5 (retrieval — `vector_search` + opt-in `create_vector_index`),
@@ -30,8 +30,7 @@ calls (`generate`, `classify`, `extract`, `embed`, `vector_search`) have **execu
 successfully on all three engines** (Snowflake, Databricks, BigQuery) against mock sample data,
 alongside **full deterministic execution on duckdb** of chunking, prompt resolution/rendering, the
 cost guard, and the AI run log. Not yet validated: execution against real production data at
-scale, and cost reconciliation against engine usage tables (built, LIVE-VALIDATION DEFERRED). See
-`docs/DECISIONS.md`.
+scale, and cost reconciliation against engine usage tables (built, LIVE-VALIDATION DEFERRED).
 **How to run the tests in each environment — and what to check in the results — is in `TESTING.md`.**
 **Every macro is defined with its signature and usage in the [Macro reference](#macro-reference) below.**
 **The *why* behind each major design choice is recorded as ADRs in [`adr/`](adr/README.md).**
@@ -39,29 +38,23 @@ scale, and cost reconciliation against engine usage tables (built, LIVE-VALIDATI
 ## Repo map
 
 ```
-CLAUDE.md                  # operating contract for Claude Code — read first
-docs/
-  ARCHITECTURE.md          # ← start here: the whole package explained for newcomers
-  DESIGN_SPEC.md           # full design rationale
-  DECISIONS.md             # locked decisions + open items
-  PARITY.md                # engine-surface parity (reviewed release artifact)
-tasks/                     # phase-by-phase plan; one phase at a time, approval-gated
 macros/
   functions/               # generate/classify/extract/embed (adapter.dispatch) + prereq checks
-  prompts/                 # prompt / schema (macro-library loader, D4) + render_prompt
+  prompts/                 # prompt / schema (macro-library loader, ADR-0001) + render_prompt
   chunking/                # chunk (unit packing) + split_sentences (layer-1 splitter) + array_agg/string_agg
   metadata/                # attach_metadata (non-dispatched: join source-level metadata onto chunks)
   cost/                    # guard_batch (guard) / estimate_tokens / log_ai_run / complete_ai_run
   audit/                   # ai_run_log_columns_sql / ensure_ai_run_log_exists
-  incremental/             # version_guard
+  incremental/             # version_guard / incremental_delta_predicate
+  embedding/               # content_hash / embedding_dimension / embedding_fn_fingerprint / embedding_logic_hash
   retrieval/               # vector_search
   operations/              # create_vector_index (run-operation only)
   evaluation/              # grounded / conforms_to_schema / eval (+ contains/collapse_ws/norm_text/schema_enum)
 models/audit/              # ai_run_log (append-only usage/cost log)
-prompts/                   # prompt+schema library — one Jinja macro per name+version (D4)
+prompts/                   # prompt+schema library — one Jinja macro per name+version (ADR-0001)
 seeds/                     # synthetic fixtures (no real customer data)
 integration_tests/         # per-adapter (cloud) projects + duckdb/ (credential-free deterministic tests)
-ci/                        # structure-only CI profiles (placeholder creds)
+ci/                        # structure-only CI profiles (placeholder creds) + verify_embedding_logic_hash.py
 ```
 
 ## Chunking (`chunk`) — shipped in Phase 1
@@ -70,7 +63,7 @@ ci/                        # structure-only CI profiles (placeholder creds)
 documents) into token-bounded chunks that never split a unit, never cross a partition key, and
 carry every unit's id into `source_rows` for lineage. Pure window SQL, deterministic, zero AI
 cost. Defaults: `chunk_target_tokens = 512`, `chunk_overlap_tokens = 0` (opt-in overlap).
-See `docs/DECISIONS.md` D5 and `tasks/phase-1a-chunking-design.md` for the algorithm + research.
+See ADR-0002 for the algorithm + research.
 
 ```sql
 -- Package macros are called qualified with the package name (dbt convention, like dbt_utils.*).
@@ -216,42 +209,121 @@ from raw
 
 ## Governed incremental AI model (Phases 2–4 together)
 
-The full pattern — process only new rows, re-embed on a version bump, guard cost, log every run:
+The full pattern processes only new rows, catches a row whose source text changed even when the
+model/version didn't, re-embeds on a version bump, guards cost, logs every run, and stamps the
+six-column metadata set an embedding needs to be a trustworthy cache entry rather than an opaque
+vector (see ADR-0023).
+
+`content_hash` has to be a real column somewhere upstream of the embedding model, not a same-`SELECT`
+alias filtered on in the same query (BigQuery won't resolve that) and not something `guard_batch`/
+`log_ai_run` can meter unless their `relation` actually carries it. A small staging model is that
+column's one home:
 
 ```sql
+-- models/stg_docs_hashed.sql
+{{ config(materialized = 'view') }}
+
+select
+    doc_id,
+    body,
+    {{ dbt_context_engineering.content_hash('body') }} as content_hash
+from {{ ref('stg_docs') }}
+where body is not null and length(trim(body)) > 0   -- see the null-handling note below
+```
+
+```sql
+-- models/doc_embeddings.sql
 {{ config(
     materialized  = 'incremental',
     unique_key    = 'doc_id',
     pre_hook      = [
-        "{{ dbt_context_engineering.guard_batch(ref('stg_docs'), 'body',
-            filter=dbt_context_engineering.incremental_delta_predicate('doc_id', var('embedding_model'))) }}",
+        "{{ dbt_context_engineering.guard_batch(ref('stg_docs_hashed'), 'body',
+            filter=dbt_context_engineering.incremental_delta_predicate('doc_id',
+                dbt_context_engineering.embedding_fn_fingerprint(model=var('embedding_model')),
+                'embedding_fn_fingerprint', content_hash_column='content_hash')) }}",
         "{{ dbt_context_engineering.log_ai_run('embed', model_name=var('embedding_model'),
-            relation=ref('stg_docs'), input_column='body',
-            filter=dbt_context_engineering.incremental_delta_predicate('doc_id', var('embedding_model'))) }}"
+            relation=ref('stg_docs_hashed'), input_column='body',
+            filter=dbt_context_engineering.incremental_delta_predicate('doc_id',
+                dbt_context_engineering.embedding_fn_fingerprint(model=var('embedding_model')),
+                'embedding_fn_fingerprint', content_hash_column='content_hash')) }}"
     ],
     post_hook     = "{{ dbt_context_engineering.complete_ai_run('embed', model_name=var('embedding_model')) }}"
 ) }}
-{% set delta = dbt_context_engineering.incremental_delta_predicate('doc_id', var('embedding_model')) %}
+{% set fingerprint = dbt_context_engineering.embedding_fn_fingerprint(model=var('embedding_model')) %}
+{% set delta = dbt_context_engineering.incremental_delta_predicate('doc_id', fingerprint,
+    'embedding_fn_fingerprint', content_hash_column='content_hash') %}
 select
     doc_id,
-    '{{ var("embedding_model") }}' as model_version,   -- stamp the pinned version
-    {{ dbt_context_engineering.embed('body') }} as embedding
-from {{ ref('stg_docs') }}
-{% if delta %}where {{ delta }}                            -- delta only; skipped on first build / --full-refresh / version bump
+    '{{ var("embedding_model") }}'                          as model_version,     -- audit only, see below
+    content_hash,
+    {{ dbt_context_engineering.embed('body') }}             as embedding,
+    {{ dbt_context_engineering.embedding_dimension(dbt_context_engineering.embed('body')) }} as embedding_dimension,
+    '{{ fingerprint }}'                                     as embedding_fn_fingerprint,
+    '{{ run_started_at }}'                                  as embedded_at,
+    '{{ dbt_context_engineering.embedding_logic_hash() }}'  as embedding_logic_hash  -- audit only, see below
+from {{ ref('stg_docs_hashed') }}
+{% if delta %}where {{ delta }}                            -- delta only; skipped on first build / --full-refresh / fingerprint bump
 {% endif %}
 ```
 
-`version_guard` returns True (reprocess all) on first build, `--full-refresh`, or when the
-stored `model_version` differs from the pinned one, so a model/embedding-version bump re-embeds
-the whole corpus, and the `unique_key` merge replaces the old rows. No custom materialization.
+`version_guard` (via `incremental_delta_predicate`'s `version`/`version_column` args) returns True
+(reprocess all) on first build, `--full-refresh`, or when the stored `embedding_fn_fingerprint`
+differs from the one just computed, so a model/dimension/provider-parameter bump re-embeds the
+whole corpus, and the `unique_key` merge replaces the old rows. No custom materialization, and no
+code change to `version_guard`/`incremental_delta_predicate` was needed to point them at the
+fingerprint instead of a bare model-version string, both already compare an arbitrary
+`(value, column)` pair. `model_version` keeps being stamped anyway, purely for human debugging,
+denormalized and redundant with the fingerprint the same way the source doc keeps a plain model
+name column even once a real cache key exists. `embedding_logic_hash()` is the same kind of audit
+column for a different axis: which build of `embed()`'s own logic produced the row (see the macro
+reference below); neither one ever gates reprocessing.
 
 **Guard AND log the delta, not the corpus, from one source of truth.** The body's `where`, the
 guard's `filter`, and the log's `filter` must all describe the same batch, or they drift.
-`incremental_delta_predicate('doc_id', var('embedding_model'))` returns that predicate once (or
-`none` when the whole corpus reruns), so all three agree. Without it: the guard counts the full
-source and, once the corpus passes `max_batch_rows`, every incremental run false-trips even for a
-few new rows; and the log records the whole corpus every run, so `row_count`/`est_cost` are wrong
-by orders of magnitude.
+`incremental_delta_predicate(...)` returns that predicate once (or `none` when the whole corpus
+reruns), so all three agree. Without it: the guard counts the full source and, once the corpus
+passes `max_batch_rows`, every incremental run false-trips even for a few new rows; and the log
+records the whole corpus every run, so `row_count`/`est_cost` are wrong by orders of magnitude.
+
+**A row whose key already exists but whose source text changed is a gap the key-existence check
+alone can't see**, and `version_guard`'s full-corpus reprocess is the wrong tool for a single
+changed row. `content_hash_column` closes it: `incremental_delta_predicate` OR's a row-value
+comparison via the dispatched `row_value_not_in()` helper onto the key-existence check, not a
+correlated subquery. A correlated form (`content_hash != (select ...)` or `not exists (select ...
+where t.doc_id = doc_id)`) is a real trap: an unqualified column inside a correlated subquery
+resolves to the subquery's *own* same-named column, not the outer row, whenever the inner table
+has a column by that name, which it always will here, so both correlated forms return wrong
+answers. Row-value `NOT IN` needs no alias or correlation at all, so there's nothing to shadow. A
+row whose current hash is null evaluates the whole tuple comparison to null (duckdb) or false
+(Snowflake, Databricks), both mean "excluded" for `WHERE`-clause purposes, so `WHERE` excludes it
+and the row's last-known-good embedding stays frozen rather than getting nulled or deleted, on
+purpose: a source going null could mean "retract this" or "transient load hiccup," and this
+package can't know which, so it doesn't guess.
+
+**`row_value_not_in()` is its own dispatched primitive because the row-value comparison itself
+diverges per engine.** BigQuery rejects the plain form (`(a, b) not in (select a, b from t)`,
+`"Subquery of type IN must have only one output column"`) and needs its subquery's `SELECT` list
+wrapped as a single tuple; that wrapped form is in turn rejected by both Snowflake and Databricks.
+Isolated in `macros/incremental/row_value_not_in.sql`, the same `array_agg`/`contains`-style
+pattern this package already uses everywhere else for per-engine divergence. See ADR-0023 for the
+full reasoning.
+
+**The null/empty-text guard in `stg_docs_hashed` above is documentation, not a package macro**,
+and it protects a narrower case than it looks like it should. A row whose text goes null *after* a
+successful embed needs no guard at all, freshly-computed null `content_hash` compared against a
+stored value is null under three-valued logic, so `WHERE` excludes it automatically, the frozen
+behavior above. What the guard actually protects is a row that's *never* been embedded with
+currently-null text: the key-existence check is true regardless of content (`TRUE OR ...` is
+`TRUE`), so a brand-new null-text row would otherwise still enter the delta and attempt `embed()`
+on null input. `chunk()`/`attach_metadata()` were deliberately not changed to add this, reopening
+either is scope past what a single null-text row needs.
+
+**Source-column provenance is documentation too.** `label_column`/`text_column` (`chunk`) and
+`metadata_columns`/`in_text` (`attach_metadata`) already exist as literal call-site arguments, so
+the information is technically present, just in the source of whichever upstream model built the
+chunks, not anywhere a consumer looking at the embeddings table would think to check. Name which
+source columns and calls fed `embedding`/`chunk_text` in that column's `.yml` `description`,
+surfaced natively through `dbt docs generate`, rather than building anything new.
 
 **Which hook phase `log_ai_run` needs depends on what `relation`/`filter` actually reference, not
 on preference.** Three cases:
@@ -277,11 +349,15 @@ incremental); it's wrong in both phases, not risky in just one. Pre-hook reports
 state, missing this run's rows entirely. Post-hook reports the whole cumulative table, every row
 ever merged in, not this run's batch.
 
-Note the pre-hook meters `relation=ref('stg_docs')`, not `this`; the token estimate reads `body`,
-which exists in the source but not in this model's output (`doc_id, model_version, embedding`).
-`this`, `is_incremental()`, and `version_guard()` all resolve inside pre-/post-hooks, verified on
-duckdb (`guard_delta`, `logged_filtered`, and `logged_incremental_delta`, which exercises the
-exact two-build, real-delta scenario above end to end).
+Note the pre-hook meters `relation=ref('stg_docs_hashed')`, not `this`; the token estimate reads
+`body`, which exists in that staging model but not in `doc_embeddings`'s own output (`doc_id,
+model_version, content_hash, embedding, embedding_dimension, embedding_fn_fingerprint,
+embedded_at, embedding_logic_hash`). `this`, `is_incremental()`, and `version_guard()` all resolve
+inside pre-/post-hooks, verified on duckdb (`guard_delta`, `logged_delta`, and
+`content_hash_delta`, which exercises the exact two-build, real-content-hash-delta scenario above
+end to end, including the row-value `NOT IN` predicate inside `guard_batch`'s own aggregate
+cost-estimate query) and mirrored on all three cloud warehouses
+(`content_hash_delta_sf`/`_dbx`/`_bq`).
 
 **`ai_run_log` tracks each row's lifecycle in a `completed` boolean.** `false` when `log_ai_run`
 inserts it, flipped to `true` once `complete_ai_run`'s post-hook confirms the model finished. If
@@ -390,7 +466,39 @@ for drift tracking.
 
 All three are validated end to end on duckdb (both pass and catch directions). The only
 per-engine divergence is the containment / whitespace primitives (`contains`,
-`collapse_ws`), isolated behind dispatch — see `docs/PARITY.md`.
+`collapse_ws`), isolated behind dispatch — see ADR-0007.
+
+## Runtime drift monitoring (`embedding_canary`)
+
+`embedding_fn_fingerprint` and `embedding_logic_hash` (above) catch a model/config change or a
+package-code change; neither can see a provider silently swapping a pinned model's behavior
+underneath an unchanged config, weeks after this package last shipped. `embedding_canary`
+re-embeds a small fixed probe set and compares it against a blessed baseline by **cosine
+similarity**, the same measure `vector_search` already uses to rank results, so that kind of
+drift shows up as a red test (`assert_embedding_canary_matches_baseline`) instead of something a
+human has to already suspect. See ADR-0026 for the full design, including the live measurement
+that ruled out an exact-match comparison (the same probe, re-embedded, lands on a small number of
+distinct vectors differing by a few thousandths, not one fixed value).
+
+**Disabled by default** (`monitoring: +enabled: false`). Installing this package adds no
+automatic cost; the canary makes real `embed()` calls every time it runs. To use it:
+
+```yaml
+# your dbt_project.yml
+models:
+  dbt_context_engineering:
+    monitoring:
+      +enabled: true
+```
+
+Then add `embedding_canary` (or `--select tag:embedding_canary`) to your **own scheduled
+production job**, not your default or dev build command. The canary only detects drift by
+comparing two runs spaced apart in time; running it on every ad-hoc dev build charges you the
+same `embed()` cost repeatedly without improving the odds of catching anything, since real drift
+happens on the provider's own schedule, not yours.
+
+On Snowflake, also set `embedding_canary_vector_dimension` to your `embedding_model`'s output
+dimension (`VECTOR`'s dimension is part of its type and Snowflake requires a literal there).
 
 ## Macro reference
 
@@ -542,12 +650,64 @@ where doc_id not in (select doc_id from {{ this }})
 {% endif %}
 ```
 
-**`incremental_delta_predicate(unique_key, version=none, version_column='model_version')`** → the
-delta `WHERE` predicate for an incremental AI model, or `none` when the whole corpus reruns (first
-build / `--full-refresh` / version bump). One source of truth so the body's `where`, the
+**`incremental_delta_predicate(unique_key, version=none, version_column='model_version', content_hash_column=none)`**
+→ the delta `WHERE` predicate for an incremental AI model, or `none` when the whole corpus reruns
+(first build / `--full-refresh` / version bump). One source of truth so the body's `where`, the
 `guard_batch` `filter`, and the `log_ai_run` `filter` describe the **same** batch and can't drift.
 Pass `version` for a versioned/embedding model (gates on `version_guard`); omit it to gate on
-`is_incremental()`. Resolves `this`/`is_incremental()`/`version_guard()` correctly inside pre-/post-hooks.
+`is_incremental()`. Pass `content_hash_column` to also catch a row whose key already exists and
+whose version/fingerprint still matches, but whose *source text changed*, a gap the key-existence
+check alone can't see, OR'd on via the dispatched `row_value_not_in()` helper, a row-value
+comparison, not a correlated subquery (a correlated form of this predicate returns wrong answers
+whenever the same column names appear on both sides, see the governed-incremental-model section
+above). Resolves `this`/`is_incremental()`/`version_guard()` correctly inside pre-/post-hooks.
+
+**`row_value_not_in(columns, relation)`** → `(col1, col2, ...) not in (select ... from relation)`,
+dispatched because BigQuery needs the subquery's own output wrapped as a single tuple and
+Snowflake/Databricks both reject that wrapped form. Backs `incremental_delta_predicate`'s
+`content_hash_column` argument; rarely called directly.
+
+### Embedding metadata
+
+The six-column cache-key metadata set for `embed()`, see the governed-incremental-model section
+above and ADR-0023: enough to tell whether a stored vector still matches what would be produced
+today, and to scope an incident to exactly the rows it touched, without guessing.
+
+**`content_hash(text_expression)`**, SHA-256 of `text_expression` as a lowercase hex string on
+every engine. Hash the exact string handed to `embed()`, after chunking, after any
+`attach_metadata` `in_text` prepending, not a raw source column, or a change to assembly logic that
+doesn't touch the final string goes undetected. Needs to be a real column somewhere upstream of the
+embedding model (see the governed-incremental-model section), not a same-`SELECT` alias filtered on
+in the same query.
+
+**`embedding_dimension(vector_expression)`**, the length of the vector array, **observed** from
+the actual returned value, never the dimension you configured or asked for; a Matryoshka-style
+truncation config silently changes the vector while an intent-recorded value would keep agreeing
+with your (wrong) config.
+
+**`embedding_fn_fingerprint(model=none, dimension=none, extra=none)`**, a compile-time hash
+(plain hex string) of everything that defines the `embed()` **call** besides the input text: model
+identity (`model`, defaults to `var('embedding_model')`), a configured dimension/truncation
+parameter (`dimension`, always `none` today, `embed()` has no such parameter yet, a
+forward-compatible placeholder), and any other vector-affecting provider parameter (`extra`).
+Deliberately excludes chunking/preprocessing config (any change to it that actually alters the
+text already surfaces as a `content_hash` mismatch) and code identity (see
+`embedding_logic_hash()` below). Pass this as `incremental_delta_predicate`'s `version` argument
+with `version_column='embedding_fn_fingerprint'` so a model/dimension/provider-parameter bump
+re-embeds the whole corpus; `version_guard` needs no code change to do this, it already compares an
+arbitrary `(value, column)` pair.
+
+**`embedding_logic_hash()`**, a **generated** literal, a content hash of `embed()`'s call-graph
+closure in this package's own source (derived by walking `dbt_context_engineering.<name>(...)`
+calls starting from `embed.sql`, not hand-listed, see `ci/verify_embedding_logic_hash.py`),
+regenerated and verified by this repo's own CI on every change. Scoped to that closure specifically,
+not this package's identity as a whole; a change to unrelated logic elsewhere in the package won't
+move this hash. Audit column only, never a fingerprint input, never gates reprocessing, answers
+"which build of `embed()`'s own logic produced this row" the rare time that's needed, without
+forcing every embedding model to reprocess on every unrelated package release the way folding it
+into the fingerprint would. It's a hash of source bytes, not of behavior, so most edits inside the
+closure change it without changing any vector already produced; see ADR-0025 for why that's also
+the reason it stays an audit column rather than a blocking check.
 
 ### Retrieval & knowledge base
 
@@ -611,4 +771,7 @@ inferred. Key vars: `model_generate` / `model_classify` / `model_extract` and
 `max_output_tokens` and `bq_thinking_budget` (output-side cost control — the latter is
 BigQuery/Gemini-only, `0` disables billed "thinking"); `cost_per_1k_tokens` (for logged
 `est_cost`). BigQuery's `bq_connection` is **optional** (End-User Credentials cover interactive
-queries; the `AI.*` functions need no `CREATE MODEL` — see `docs/PARITY.md`).
+queries; the `AI.*` functions need no `CREATE MODEL`). `embedding_canary_similarity_threshold`
+(default `0.999`), `embedding_canary_test_severity` (default `warn`), and, Snowflake only,
+`embedding_canary_vector_dimension` (required, no default) configure the runtime drift monitor
+above; `monitoring: +enabled: true` in your own `dbt_project.yml` turns it on.

@@ -1,0 +1,57 @@
+# Example ~/.dbt/profiles.yml entry for this repo's integration tests.
+#
+# One profile, `dbt-context-engineering`, shared by every integration-test project:
+#   - integration_tests/duckdb  -> target `dev`                             (credential-free;
+#                                                              usually run with its own
+#                                                              --profiles-dir, so this entry is
+#                                                              only needed if you invoke it without
+#                                                              that flag)
+#   - integration_tests/cloud  -> targets `snowflake` / `databricks` / `bigquery` (live warehouses;
+#                                                              real AI calls, real cost — see
+#                                                              TESTING.md §3)
+#
+# Copy the block below into ~/.dbt/profiles.yml (merging if you already have other profiles there)
+# and replace every `<...>` placeholder with real values. Never commit real credentials — this
+# file only ever holds placeholders.
+
+dbt-context-engineering:
+  target: snowflake   # pick whichever you run most often locally; override per-invocation with --target
+  outputs:
+
+    # --- integration_tests/duckdb --------------------------------------------------------------
+    dev:
+      type: duckdb
+      path: 'target/tests.duckdb'
+      threads: 1
+
+    # --- integration_tests/cloud, --target snowflake ---------------------------------------------
+    snowflake:
+      type: snowflake
+      account: <account_locator>
+      user: <username>
+      password: <password_or_use_a_key_pair/sso_config_instead>
+      role: <role>
+      database: <database>
+      warehouse: <warehouse>
+      schema: <schema>
+      threads: 4
+
+    # --- integration_tests/cloud, --target databricks --------------------------------------------
+    databricks:
+      type: databricks
+      host: <workspace_host>            # e.g. adb-1234567890123456.7.azuredatabricks.net
+      http_path: <sql_warehouse_http_path>
+      token: <personal_access_token>
+      schema: <schema>
+      threads: 4
+
+    # --- integration_tests/cloud, --target bigquery -----------------------------------------------
+    bigquery:
+      type: bigquery
+      method: service-account
+      project: <gcp_project_id>
+      dataset: <dataset>
+      keyfile: <path_to_service_account_json>
+      threads: 4
+      # bq_connection is a dbt VAR (set in dbt_project.yml/--vars), not a profile field — leave
+      # unset here to use the service-account/default connection path.

@@ -1,0 +1,13 @@
+-- LIVE groundedness of real extract evidence on this warehouse: when the model returns a
+-- non-empty evidence quote, it must actually appear (case/whitespace-normalized) in the source
+-- utterance. A returned row is a HALLUCINATED quote. Behavioral — surfaces real model quality, not
+-- just code bugs; empty evidence is not flagged. Fail rows only.
+select utterance_id, evidence
+from {{ ref('extract_flat') }}
+where evidence is not null
+  and length(trim(evidence)) > 0
+  and not (
+    {{ dbt_context_engineering.contains(
+        dbt_context_engineering.norm_text('utterance_text', true, true),
+        dbt_context_engineering.norm_text('evidence',       true, true)) }}
+  )

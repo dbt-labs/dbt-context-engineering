@@ -1,5 +1,5 @@
 # Local duckdb profile — no credentials, no network. Executes chunking SQL for deterministic tests.
-duckdb_tests:
+dbt-context-engineering:
   target: dev
   outputs:
     dev:

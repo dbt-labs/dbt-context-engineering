@@ -1,5 +1,6 @@
 {{ config(materialized='table') }}
-{#- Synthetic pre-embedded source A (support tickets). -#}
-select 't1' as ticket_id, 'acme'   as account_id, 'login broken'     as body, [1.0, 0.0, 0.0]::float[3] as embedding, timestamp '2026-01-01 10:00' as created_at, 'https://tickets.example.com/t1' as ticket_url
+{#- Synthetic pre-embedded source A (support tickets). category exercises knowledge_base's
+    optional classification key (present here; see kb.sql and source_calls, which omits it). -#}
+select 't1' as ticket_id, 'acme'   as account_id, 'login broken'     as body, [1.0, 0.0, 0.0]::float[3] as embedding, timestamp '2026-01-01 10:00' as created_at, 'https://tickets.example.com/t1' as ticket_url, 'bug' as category
 union all
-select 't2',              'globex', 'billing question',                   [0.0, 1.0, 0.0]::float[3],       timestamp '2026-01-02 11:00',                       'https://tickets.example.com/t2'
+select 't2',              'globex', 'billing question',                   [0.0, 1.0, 0.0]::float[3],       timestamp '2026-01-02 11:00',                       'https://tickets.example.com/t2', 'billing'

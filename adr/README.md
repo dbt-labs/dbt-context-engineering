@@ -41,6 +41,8 @@ just record the choice.
 | [0024](0024-inline-embedding-storage-over-a-side-table.md) | Inline embedding storage, a side table considered and declined | Accepted |
 | [0025](0025-embedding-logic-hash-as-a-ci-verified-content-hash.md) | `embedding_logic_hash` as a CI-verified content hash, not a version string or an env var | Accepted |
 | [0026](0026-embedding-canary-runtime-drift-monitor.md) | `embedding_canary`: a runtime drift monitor, complementing `embedding_logic_hash` | Accepted |
+| [0027](0027-classification-as-a-second-privileged-knowledge-base-column.md) | Classification as a second privileged knowledge_base column | Accepted |
+| [0028](0028-attach-metadata-incremental-via-composition-not-a-macro-change.md) | `attach_metadata` goes incremental by composition, not by changing the macro | Accepted |
 
 ## New here? A reading path
 
@@ -58,10 +60,12 @@ of the discipline.
    - [0002](0002-chunking-as-token-bounded-unit-packing.md) — chunking (and what an *embedding* is)
    - [0013](0013-attach-metadata-as-a-separate-macro.md) — attaching source metadata onto chunks
    - [0016](0016-in-text-additive-metadata.md) — embedding metadata into the chunk text
+   - [0028](0028-attach-metadata-incremental-via-composition-not-a-macro-change.md), reusing 0023's content-hash delta so attach_metadata reprocesses only what changed
 3. **Reading it back.**
    - [0005](0005-retrieval-brute-force-default-index-opt-in.md) — retrieval (and *cosine similarity* / *semantic search*)
    - [0006](0006-knowledge-base-union-to-common-shape.md) — unifying many sources into one knowledge base
    - [0014](0014-generic-metadata-explicit-provenance.md) — how provenance is promoted in the knowledge base
+   - [0027](0027-classification-as-a-second-privileged-knowledge-base-column.md), asking 0014's promote-or-stay-generic question for a third kind of field (the derived label), the first time it's answered "promote" since citation_url
 4. **Making it affordable, correct, and trustworthy** — the governance that makes it production-grade.
    - [0003](0003-cost-as-a-first-class-output.md) — cost (the token economy, guard + log)
    - [0004](0004-version-aware-incremental-refresh.md) — version-aware incremental refresh

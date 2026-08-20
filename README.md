@@ -368,6 +368,50 @@ also creates `ai_run_log` itself the first time it fires against a target that d
 yet, so a `dbt run --select <one_model>` that never selects `ai_run_log` still has somewhere to
 write.
 
+### Governed incremental metadata attach
+
+`attach_metadata` (like `chunk`) has zero AI cost, so it needs none of `version_guard`'s
+model-version machinery, but at corpus scale, rebuilding it in full on every run is still real
+warehouse cost. Its output for a given `chunk_id` is a pure function of one chunk row plus its one
+metadata row, the same per-row independence `embed`'s content-hash delta relies on
+(see ADR-0023), so the same two macros, `incremental_delta_predicate` and `content_hash`, reuse
+directly, no change to `attach_metadata` itself (ADR-0028):
+
+```sql
+-- models/chunks_with_metadata.sql
+{{ config(materialized='incremental', unique_key='chunk_id') }}
+
+with attached as (
+    {{ dbt_context_engineering.attach_metadata(
+        chunks_relation=ref('chunks'), metadata_relation=ref('documents'),
+        metadata_key_column='document_id', metadata_columns=['title', 'citation_url']
+    ) }}
+),
+hashed as (
+    select *,
+        {{ dbt_context_engineering.content_hash(
+            "chunk_text || '|' || coalesce(cast(title as " ~ dbt.type_string() ~ "), '') || '|' || coalesce(cast(citation_url as " ~ dbt.type_string() ~ "), '')"
+        ) }} as content_hash
+    from attached
+)
+select * from hashed
+{% set delta = dbt_context_engineering.incremental_delta_predicate('chunk_id', content_hash_column='content_hash') %}
+{% if delta %}where {{ delta }}{% endif %}
+```
+
+`attach_metadata`'s own macro output is itself a complete `WITH ... SELECT ... ORDER BY`
+statement; compose it as a nested CTE (`attached` above), not the top-level statement, so
+`content_hash` lands as a real column in a later CTE and the delta filters on it in the final
+`SELECT`'s `WHERE`, never a same-`SELECT` alias (the same BigQuery trap noted throughout this
+README). `incremental_delta_predicate` is called with `version` omitted here, no model version to
+track, so it gates reprocess-all purely on `is_incremental()` (first build / `--full-refresh`).
+Hash **both** `chunk_text` and every `metadata_columns` value, so a row is caught whichever side
+changed, a chunk's own text (upstream, from `chunk`) or a metadata value with the chunk text held
+constant, the gap a plain key-existence check leaves open. Confirmed live on duckdb and on all
+three cloud warehouses, including the two-phase scenario
+(`integration_tests/{duckdb,cloud}/models/attach_metadata_delta.sql`) and, on BigQuery, the
+`row_value_not_in` wrapped-tuple dispatch this model's delta predicate exercises.
+
 ## Retrieval (Phase 5)
 
 `vector_search` ranks a corpus by cosine similarity to a query vector — brute-force over the
@@ -391,11 +435,12 @@ explicitly. Databricks indexes are created via its Vector Search API, not SQL.
 ## Knowledge base (Phase 6)
 
 `knowledge_base` unifies multiple pre-embedded sources (tickets, calls, notes, …) into one
-mart with a common shape — `source_type, source_id, account_key, text, embedding, ts,
-citation_url` — so a single search answers "everything about account X" across systems, with
-per-source lineage and a resolvable citation link carried into results. **Register a new
-source** by adding one dict to the list; `citation_url` is optional per source (omit it for a
-source with no resolvable link and that source's rows get `NULL`):
+mart with a common shape (`source_type, source_id, account_key, text, embedding, ts,
+citation_url, classification`), so a single search answers "everything about account X" across
+systems, with per-source lineage, a resolvable citation link, and a `classify()` label carried
+into results. **Register a new source** by adding one dict to the list; `citation_url` and
+`classification` are each optional per source, independently (omit either for a source with no
+resolvable link / no classify() label and that source's rows get `NULL` for the omitted one):
 
 ```sql
 -- models/knowledge_base.sql
@@ -403,7 +448,7 @@ source with no resolvable link and that source's rows get `NULL`):
     {'relation': ref('stg_tickets'), 'source_type': 'ticket',
      'source_id': 'ticket_id', 'account_key': 'account_id',
      'text': 'body', 'embedding': 'embedding', 'timestamp': 'created_at',
-     'citation_url': 'ticket_url'},
+     'citation_url': 'ticket_url', 'classification': 'category'},
     {'relation': ref('stg_calls'),   'source_type': 'call',
      'source_id': 'call_id',   'account_key': 'account_id',
      'text': 'transcript', 'embedding': 'embedding', 'timestamp': 'call_time',
@@ -411,14 +456,14 @@ source with no resolvable link and that source's rows get `NULL`):
 ]) }}
 ```
 
-Then account-scoped retrieval across all sources at once:
+Then account-scoped retrieval across all sources at once, optionally faceted by classification:
 
 ```sql
 {{ dbt_context_engineering.vector_search(
     relation=ref('knowledge_base'), embedding_column='embedding',
     query_embedding=dbt_context_engineering.embed('renewal risk'),
-    id_column='source_id', select_columns=['source_type', 'citation_url'],
-    filter="account_key = 'acme'") }}
+    id_column='source_id', select_columns=['source_type', 'citation_url', 'classification'],
+    filter="account_key = 'acme' and classification = 'at_risk'") }}
 ```
 
 All embeddings must come from the same model (see `version_guard`). A managed hybrid index
@@ -723,12 +768,14 @@ service (Snowflake Cortex Search, BigQuery vector index; Databricks is API-creat
 explicitly when done.
 
 **`knowledge_base(sources)`** — unions many pre-embedded source relations into one common-shape
-mart (`source_type, source_id, account_key, text, embedding, ts`) with per-source lineage. `sources`
-is a list of dicts (`relation, source_type, source_id, account_key, text, embedding, timestamp`);
+mart (`source_type, source_id, account_key, text, embedding, ts, citation_url, classification`)
+with per-source lineage. `sources` is a list of dicts (`relation, source_type, source_id,
+account_key, text, embedding, timestamp`, plus optional `citation_url` and `classification`);
 register a source by adding one dict. `text` and `ts` are cast to a common type so sources with
 differing types (e.g. a `DATE` vs a `TIMESTAMP` timestamp column) union cleanly on strict engines
 like BigQuery; `embedding` is not cast — all sources must already share one embedding model (and
-thus type), which `version_guard` enforces.
+thus type), which `version_guard` enforces. `citation_url` and `classification` are each
+independently optional per source and default to `NULL` when a source omits them.
 
 ### Evaluation & groundedness
 

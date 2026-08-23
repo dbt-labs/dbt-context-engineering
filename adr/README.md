@@ -42,6 +42,7 @@ just record the choice.
 | [0025](0025-embedding-logic-hash-as-a-ci-verified-content-hash.md) | `embedding_logic_hash` as a CI-verified content hash, not a version string or an env var | Accepted |
 | [0026](0026-embedding-canary-runtime-drift-monitor.md) | `embedding_canary`: a runtime drift monitor, complementing `embedding_logic_hash` | Accepted |
 | [0027](0027-classification-as-a-second-privileged-knowledge-base-column.md) | Classification as a second privileged knowledge_base column | Accepted |
+| [0028](0028-add-ai-agg-group-level-aggregation.md) | Add `ai_agg`: a fifth operation for group-level LLM aggregation | Accepted |
 
 ## New here? A reading path
 
@@ -54,6 +55,8 @@ of the discipline.
    - [0012](0012-ai-as-a-row-level-sql-function.md) — AI as a row-level SQL function (a prompt becomes a column)
    - [0001](0001-prompts-and-schemas-as-versioned-macros.md) — prompts & schemas as code (and what *structured output* is)
    - [0010](0010-four-ai-operations.md) — the four things you can ask a model to do
+   - [0028](0028-add-ai-agg-group-level-aggregation.md), a fifth: asking a model to reason across a
+     whole group at once, and why Databricks needed a bounded design rather than full parity
    - [0008](0008-normalizing-ai-output.md) — reading the AI's answer back out
 2. **Preparing the text.**
    - [0002](0002-chunking-as-token-bounded-unit-packing.md) — chunking (and what an *embedding* is)

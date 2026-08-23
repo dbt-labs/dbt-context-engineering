@@ -584,6 +584,38 @@ quote or several typed fields; **generate** for free text (summary, rewrite, ans
 JSON. `generate` + a schema and `extract` overlap (on BigQuery they're the same call); extract
 is the "schema is the point / stay grounded" specialization that maps to dedicated extract functions.
 
+### Group-level aggregation (`ai_agg`)
+
+**`ai_agg(input_column, prompt, order_column=none, model=none)`** asks an LLM to reason across an
+entire `GROUP BY` group at once, summarize a call transcript, roll up sentiment across an account's
+tickets, rather than row by row. Unlike the four operations above, `prompt` is a plain instruction
+string, not a template with an `{{ input }}` placeholder.
+
+Cross-adapter behavior genuinely diverges here, more than for the four row-level operations. See
+[ADR-0028](adr/0028-add-ai-agg-group-level-aggregation.md) for the full
+live-validation evidence:
+
+| | Snowflake (`AI_AGG`) | Databricks (composition) | BigQuery (`AI.AGG`) |
+|---|---|---|---|
+| `model` | no-op, engine picks internally | honored | honored |
+| `order_column` | no-op, pre-sort your own `FROM` clause instead | honored | confirmed no-op |
+| Oversized group | handled internally (map-reduce) | not handled, guard it yourself | handled internally (map-reduce) |
+
+On Databricks, `ai_agg` has no protection against a group whose text exceeds the model's context
+window, unlike the native functions on the other two engines. Pair it with `guard_agg_batch`:
+
+```sql
+{{ config(
+  pre_hook = "{{ dbt_context_engineering.guard_agg_batch(ref('utterances'), 'utterance_text', 'call_id') }}"
+) }}
+select
+  call_id,
+  {{ dbt_context_engineering.ai_agg('utterance_text',
+      'Summarize this call in one sentence.', order_column='turn_index') }} as call_summary
+from {{ ref('utterances') }}
+group by call_id
+```
+
 ### Reading AI output back
 
 The wrappers normalize the *call*; these normalize the *result* (Snowflake VARIANT / Databricks
@@ -617,6 +649,12 @@ corpus splits the same everywhere. For better splitting use a real tokenizer ups
 rows + estimated tokens of the input and **raises before the model runs** if it exceeds
 `max_batch_rows` / `max_est_tokens`. No AI call ships without one. On an incremental model pass
 `filter` (see `incremental_delta_predicate`) so it counts the delta, not the whole corpus.
+
+**`guard_agg_batch(relation, input_column, group_by_column, filter=none)`**, the grouped
+counterpart to `guard_batch`, for `ai_agg` (ADR-0028). Sums estimated tokens **per group** and
+raises, naming the offending groups, if any exceed `max_agg_group_tokens`. Needed on Databricks,
+whose `ai_agg` composition has no internal protection against an oversized group, unlike
+Snowflake's `AI_AGG` / BigQuery's `AI.AGG`.
 
 **`estimate_tokens(text_expression)`** — a SQL expression estimating tokens (`ceil(len/4)`), no
 AI. Shared by the guard and the log.

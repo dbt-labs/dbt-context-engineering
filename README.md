@@ -368,50 +368,6 @@ also creates `ai_run_log` itself the first time it fires against a target that d
 yet, so a `dbt run --select <one_model>` that never selects `ai_run_log` still has somewhere to
 write.
 
-### Governed incremental metadata attach
-
-`attach_metadata` (like `chunk`) has zero AI cost, so it needs none of `version_guard`'s
-model-version machinery, but at corpus scale, rebuilding it in full on every run is still real
-warehouse cost. Its output for a given `chunk_id` is a pure function of one chunk row plus its one
-metadata row, the same per-row independence `embed`'s content-hash delta relies on
-(see ADR-0023), so the same two macros, `incremental_delta_predicate` and `content_hash`, reuse
-directly, no change to `attach_metadata` itself (ADR-0028):
-
-```sql
--- models/chunks_with_metadata.sql
-{{ config(materialized='incremental', unique_key='chunk_id') }}
-
-with attached as (
-    {{ dbt_context_engineering.attach_metadata(
-        chunks_relation=ref('chunks'), metadata_relation=ref('documents'),
-        metadata_key_column='document_id', metadata_columns=['title', 'citation_url']
-    ) }}
-),
-hashed as (
-    select *,
-        {{ dbt_context_engineering.content_hash(
-            "chunk_text || '|' || coalesce(cast(title as " ~ dbt.type_string() ~ "), '') || '|' || coalesce(cast(citation_url as " ~ dbt.type_string() ~ "), '')"
-        ) }} as content_hash
-    from attached
-)
-select * from hashed
-{% set delta = dbt_context_engineering.incremental_delta_predicate('chunk_id', content_hash_column='content_hash') %}
-{% if delta %}where {{ delta }}{% endif %}
-```
-
-`attach_metadata`'s own macro output is itself a complete `WITH ... SELECT ... ORDER BY`
-statement; compose it as a nested CTE (`attached` above), not the top-level statement, so
-`content_hash` lands as a real column in a later CTE and the delta filters on it in the final
-`SELECT`'s `WHERE`, never a same-`SELECT` alias (the same BigQuery trap noted throughout this
-README). `incremental_delta_predicate` is called with `version` omitted here, no model version to
-track, so it gates reprocess-all purely on `is_incremental()` (first build / `--full-refresh`).
-Hash **both** `chunk_text` and every `metadata_columns` value, so a row is caught whichever side
-changed, a chunk's own text (upstream, from `chunk`) or a metadata value with the chunk text held
-constant, the gap a plain key-existence check leaves open. Confirmed live on duckdb and on all
-three cloud warehouses, including the two-phase scenario
-(`integration_tests/{duckdb,cloud}/models/attach_metadata_delta.sql`) and, on BigQuery, the
-`row_value_not_in` wrapped-tuple dispatch this model's delta predicate exercises.
-
 ## Retrieval (Phase 5)
 
 `vector_search` ranks a corpus by cosine similarity to a query vector — brute-force over the

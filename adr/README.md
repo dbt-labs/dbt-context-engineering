@@ -42,7 +42,6 @@ just record the choice.
 | [0025](0025-embedding-logic-hash-as-a-ci-verified-content-hash.md) | `embedding_logic_hash` as a CI-verified content hash, not a version string or an env var | Accepted |
 | [0026](0026-embedding-canary-runtime-drift-monitor.md) | `embedding_canary`: a runtime drift monitor, complementing `embedding_logic_hash` | Accepted |
 | [0027](0027-classification-as-a-second-privileged-knowledge-base-column.md) | Classification as a second privileged knowledge_base column | Accepted |
-| [0028](0028-attach-metadata-incremental-via-composition-not-a-macro-change.md) | `attach_metadata` goes incremental by composition, not by changing the macro | Accepted |
 
 ## New here? A reading path
 
@@ -60,7 +59,6 @@ of the discipline.
    - [0002](0002-chunking-as-token-bounded-unit-packing.md) — chunking (and what an *embedding* is)
    - [0013](0013-attach-metadata-as-a-separate-macro.md) — attaching source metadata onto chunks
    - [0016](0016-in-text-additive-metadata.md) — embedding metadata into the chunk text
-   - [0028](0028-attach-metadata-incremental-via-composition-not-a-macro-change.md), reusing 0023's content-hash delta so attach_metadata reprocesses only what changed
 3. **Reading it back.**
    - [0005](0005-retrieval-brute-force-default-index-opt-in.md) — retrieval (and *cosine similarity* / *semantic search*)
    - [0006](0006-knowledge-base-union-to-common-shape.md) — unifying many sources into one knowledge base

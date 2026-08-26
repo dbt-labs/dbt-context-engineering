@@ -391,11 +391,12 @@ explicitly. Databricks indexes are created via its Vector Search API, not SQL.
 ## Knowledge base (Phase 6)
 
 `knowledge_base` unifies multiple pre-embedded sources (tickets, calls, notes, …) into one
-mart with a common shape — `source_type, source_id, account_key, text, embedding, ts,
-citation_url` — so a single search answers "everything about account X" across systems, with
-per-source lineage and a resolvable citation link carried into results. **Register a new
-source** by adding one dict to the list; `citation_url` is optional per source (omit it for a
-source with no resolvable link and that source's rows get `NULL`):
+mart with a common shape (`source_type, source_id, account_key, text, embedding, ts,
+citation_url, classification`), so a single search answers "everything about account X" across
+systems, with per-source lineage, a resolvable citation link, and a `classify()` label carried
+into results. **Register a new source** by adding one dict to the list; `citation_url` and
+`classification` are each optional per source, independently (omit either for a source with no
+resolvable link / no classify() label and that source's rows get `NULL` for the omitted one):
 
 ```sql
 -- models/knowledge_base.sql
@@ -403,7 +404,7 @@ source with no resolvable link and that source's rows get `NULL`):
     {'relation': ref('stg_tickets'), 'source_type': 'ticket',
      'source_id': 'ticket_id', 'account_key': 'account_id',
      'text': 'body', 'embedding': 'embedding', 'timestamp': 'created_at',
-     'citation_url': 'ticket_url'},
+     'citation_url': 'ticket_url', 'classification': 'category'},
     {'relation': ref('stg_calls'),   'source_type': 'call',
      'source_id': 'call_id',   'account_key': 'account_id',
      'text': 'transcript', 'embedding': 'embedding', 'timestamp': 'call_time',
@@ -411,14 +412,14 @@ source with no resolvable link and that source's rows get `NULL`):
 ]) }}
 ```
 
-Then account-scoped retrieval across all sources at once:
+Then account-scoped retrieval across all sources at once, optionally faceted by classification:
 
 ```sql
 {{ dbt_context_engineering.vector_search(
     relation=ref('knowledge_base'), embedding_column='embedding',
     query_embedding=dbt_context_engineering.embed('renewal risk'),
-    id_column='source_id', select_columns=['source_type', 'citation_url'],
-    filter="account_key = 'acme'") }}
+    id_column='source_id', select_columns=['source_type', 'citation_url', 'classification'],
+    filter="account_key = 'acme' and classification = 'at_risk'") }}
 ```
 
 All embeddings must come from the same model (see `version_guard`). A managed hybrid index
@@ -583,6 +584,38 @@ quote or several typed fields; **generate** for free text (summary, rewrite, ans
 JSON. `generate` + a schema and `extract` overlap (on BigQuery they're the same call); extract
 is the "schema is the point / stay grounded" specialization that maps to dedicated extract functions.
 
+### Group-level aggregation (`ai_agg`)
+
+**`ai_agg(input_column, prompt, order_column=none, model=none)`** asks an LLM to reason across an
+entire `GROUP BY` group at once, summarize a call transcript, roll up sentiment across an account's
+tickets, rather than row by row. Unlike the four operations above, `prompt` is a plain instruction
+string, not a template with an `{{ input }}` placeholder.
+
+Cross-adapter behavior genuinely diverges here, more than for the four row-level operations. See
+[ADR-0028](adr/0028-add-ai-agg-group-level-aggregation.md) for the full
+live-validation evidence:
+
+| | Snowflake (`AI_AGG`) | Databricks (composition) | BigQuery (`AI.AGG`) |
+|---|---|---|---|
+| `model` | no-op, engine picks internally | honored | honored |
+| `order_column` | no-op, pre-sort your own `FROM` clause instead | honored | confirmed no-op |
+| Oversized group | handled internally (map-reduce) | not handled, guard it yourself | handled internally (map-reduce) |
+
+On Databricks, `ai_agg` has no protection against a group whose text exceeds the model's context
+window, unlike the native functions on the other two engines. Pair it with `guard_agg_batch`:
+
+```sql
+{{ config(
+  pre_hook = "{{ dbt_context_engineering.guard_agg_batch(ref('utterances'), 'utterance_text', 'call_id') }}"
+) }}
+select
+  call_id,
+  {{ dbt_context_engineering.ai_agg('utterance_text',
+      'Summarize this call in one sentence.', order_column='turn_index') }} as call_summary
+from {{ ref('utterances') }}
+group by call_id
+```
+
 ### Reading AI output back
 
 The wrappers normalize the *call*; these normalize the *result* (Snowflake VARIANT / Databricks
@@ -616,6 +649,12 @@ corpus splits the same everywhere. For better splitting use a real tokenizer ups
 rows + estimated tokens of the input and **raises before the model runs** if it exceeds
 `max_batch_rows` / `max_est_tokens`. No AI call ships without one. On an incremental model pass
 `filter` (see `incremental_delta_predicate`) so it counts the delta, not the whole corpus.
+
+**`guard_agg_batch(relation, input_column, group_by_column, filter=none)`**, the grouped
+counterpart to `guard_batch`, for `ai_agg` (ADR-0028). Sums estimated tokens **per group** and
+raises, naming the offending groups, if any exceed `max_agg_group_tokens`. Needed on Databricks,
+whose `ai_agg` composition has no internal protection against an oversized group, unlike
+Snowflake's `AI_AGG` / BigQuery's `AI.AGG`.
 
 **`estimate_tokens(text_expression)`** — a SQL expression estimating tokens (`ceil(len/4)`), no
 AI. Shared by the guard and the log.
@@ -723,12 +762,14 @@ service (Snowflake Cortex Search, BigQuery vector index; Databricks is API-creat
 explicitly when done.
 
 **`knowledge_base(sources)`** — unions many pre-embedded source relations into one common-shape
-mart (`source_type, source_id, account_key, text, embedding, ts`) with per-source lineage. `sources`
-is a list of dicts (`relation, source_type, source_id, account_key, text, embedding, timestamp`);
+mart (`source_type, source_id, account_key, text, embedding, ts, citation_url, classification`)
+with per-source lineage. `sources` is a list of dicts (`relation, source_type, source_id,
+account_key, text, embedding, timestamp`, plus optional `citation_url` and `classification`);
 register a source by adding one dict. `text` and `ts` are cast to a common type so sources with
 differing types (e.g. a `DATE` vs a `TIMESTAMP` timestamp column) union cleanly on strict engines
 like BigQuery; `embedding` is not cast — all sources must already share one embedding model (and
-thus type), which `version_guard` enforces.
+thus type), which `version_guard` enforces. `citation_url` and `classification` are each
+independently optional per source and default to `NULL` when a source omits them.
 
 ### Evaluation & groundedness
 

@@ -4,12 +4,16 @@
     the same embedded fixture (source_type distinguishes them) -> a 20-row mart carrying both
     source types with lineage. knowledge_base is pure portable SQL (union + common-shape casts,
     no per-engine dispatch), so this is a liveness/shape check that the union + normalization run on
-    the real warehouse. account_key = call_id; ts is a fixed literal (the fixture has no timestamp). -#}
+    the real warehouse. account_key = call_id; ts is a fixed literal (the fixture has no timestamp).
+    classification is a literal on the 'call' source and omitted on 'ticket', exercising the
+    present-key and optional-key (NULL passthrough) branches. Confirmed live on Snowflake,
+    Databricks, and BigQuery, 2026-08-20. -#}
 {{ dbt_context_engineering.knowledge_base([
     {'relation': ref('embeddings'), 'source_type': 'call',
      'source_id': 'utterance_id', 'account_key': 'call_id',
      'text': 'utterance_text', 'embedding': 'embedding',
-     'timestamp': "cast('2026-01-01 00:00:00' as " ~ dbt.type_timestamp() ~ ")"},
+     'timestamp': "cast('2026-01-01 00:00:00' as " ~ dbt.type_timestamp() ~ ")",
+     'classification': "'renewal_risk'"},
     {'relation': ref('embeddings'), 'source_type': 'ticket',
      'source_id': 'utterance_id', 'account_key': 'call_id',
      'text': 'utterance_text', 'embedding': 'embedding',

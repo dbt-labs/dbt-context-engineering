@@ -1,69 +1,65 @@
 # dbt_context_engineering
 
 A cross-platform dbt package that gives practitioners a reliable, portable toolkit for
-**context engineering** — modeling the data that AI agents read — across **Snowflake
+**context engineering** (modeling the data that AI agents read) across **Snowflake
 (Cortex), Databricks, and BigQuery**.
 
-Every warehouse now exposes AI as SQL functions, but the surfaces diverge enough that teams
-rebuild the same primitives per platform: chunking, typed AI calls, prompt versioning, cost
-control, retrieval. This package standardizes those primitives so you write the pattern once
-and run it on any of the three engines. Everything ships as ordinary dbt models, macros,
-seeds, and tests — reviewed in PRs, enforced by tests, traceable in the DAG.
-
 It is **not** an agent, an MCP server, or a serving layer. It produces the governed context
-those systems read.
+those systems read. Everything ships as ordinary dbt models, macros, seeds, and tests, reviewed
+in PRs, enforced by tests, and traceable in the DAG.
 
-## Core design principle
+## Why this exists
 
-> Normalize the ~80% that maps cleanly across engines. Make the divergent ~20% explicit
-> configuration (never inferred, always documented, fails clearly).
+For a decade we modeled data for one reader: the dashboard. AI added new readers like copilots, agents, and the warehouse's own AI SQL functions, that ask questions a dashboard never could. Answering them reliably is a modeling problem, and dbt already has the discipline for it: staging models, tests, docs, one governed DAG. Context engineering is that discipline pointed at a new reader.
 
-## Status
+Every major warehouse now exposes AI as SQL functions, but the surfaces diverge enough that teams rebuild the same primitives on each platform. This package normalizes the ~80% that maps cleanly across engines and makes the divergent ~20% explicit configuration: never inferred, always documented, and it fails clearly.
 
-Built **one phase at a time behind approval gates.** Phase 0
-(scaffolding), Phase 1 (chunking — `chunk`), Phase 2 (AI function wrappers + prompt library +
-cost guard), Phase 3 (run log), Phase 4 (incremental pattern +
-`version_guard`), Phase 5 (retrieval — `vector_search` + opt-in `create_vector_index`),
-Phase 6 (knowledge base — `knowledge_base`), and Phase 7 (context evaluation & groundedness —
-`grounded`, `conforms_to_schema`, `eval`) are complete. Testing posture: the cloud AI
-calls (`generate`, `classify`, `extract`, `embed`, `vector_search`) have **executed
-successfully on all three engines** (Snowflake, Databricks, BigQuery) against mock sample data,
-alongside **full deterministic execution on duckdb** of chunking, prompt resolution/rendering, the
-cost guard, and the AI run log. Not yet validated: execution against real production data at
-scale, and cost reconciliation against engine usage tables (built, LIVE-VALIDATION DEFERRED).
-**How to run the tests in each environment — and what to check in the results — is in `TESTING.md`.**
-**Every macro is defined with its signature and usage in the [Macro reference](#macro-reference) below.**
-**The *why* behind each major design choice is recorded as ADRs in [`adr/`](adr/README.md).**
+## The pattern this package is built around
 
-## Repo map
+The heart of the package, and the part we're focused on, have exercised end to end, and recommend building on today is one pipeline:
 
 ```
-macros/
-  functions/               # generate/classify/extract/embed (adapter.dispatch) + prereq checks
-  prompts/                 # prompt / schema (macro-library loader, ADR-0001) + render_prompt
-  chunking/                # chunk (unit packing) + split_sentences (layer-1 splitter) + array_agg/string_agg
-  metadata/                # attach_metadata (non-dispatched: join source-level metadata onto chunks)
-  cost/                    # guard_batch (guard) / estimate_tokens / log_ai_run / complete_ai_run
-  audit/                   # ai_run_log_columns_sql / ensure_ai_run_log_exists
-  incremental/             # version_guard / incremental_delta_predicate
-  embedding/               # content_hash / embedding_dimension / embedding_fn_fingerprint / embedding_logic_hash
-  retrieval/               # vector_search
-  operations/              # create_vector_index (run-operation only)
-  evaluation/              # grounded / conforms_to_schema / eval (+ contains/collapse_ws/norm_text/schema_enum)
-models/audit/              # ai_run_log (append-only usage/cost log)
-prompts/                   # prompt+schema library — one Jinja macro per name+version (ADR-0001)
-seeds/                     # synthetic fixtures (no real customer data)
-integration_tests/         # per-adapter (cloud) projects + duckdb/ (credential-free deterministic tests)
-ci/                        # structure-only CI profiles (placeholder creds) + verify_embedding_logic_hash.py
+        raw text                chunks              labeled chunks           vectors            answers
+   (transcripts, docs)   ┌────────────────┐   ┌──────────────────┐   ┌──────────────┐   ┌──────────────┐
+        ──────────────▶  │  1. CHUNK      │─▶ │  2. CLASSIFY     │─▶ │  3. EMBED    │─▶ │  4. SEARCH   │
+                         └────────────────┘   └──────────────────┘   └──────────────┘   └──────────────┘
+                          token-bounded,        typed AI label         governed          ranked cosine
+                          lineage-preserving     per chunk              embeddings         retrieval
 ```
 
-## Chunking (`chunk`) — shipped in Phase 1
+**Chunk → classify → embed → search** is the backbone of retrieval-augmented context: it takes
+messy source text (call transcripts, support tickets, docs) and turns it into a searchable,
+labeled, lineage-preserving corpus an AI agent can read reliably. Each step is an ordinary dbt
+model. You write the pattern once and it runs on any of the three engines.
 
-`chunk` packs ordered, atomic text **units** (a turn for transcripts, a sentence for
-documents) into token-bounded chunks that never split a unit, never cross a partition key, and
-carry every unit's id into `source_rows` for lineage. Pure window SQL, deterministic, zero AI
-cost. Defaults: `chunk_target_tokens = 512`, `chunk_overlap_tokens = 0` (opt-in overlap).
-See ADR-0002 for the algorithm + research.
+The steps compose but are independently useful. You can chunk without embedding and classify without searching. Together they're the path from "we have a pile of unstructured text" to "an agent can retrieve the three most relevant, labeled, citable passages about account X."
+
+Everything else in the package (see [Beyond the core pattern](#beyond-the-core-pattern-not-fully-vetted)) supports or extends this spine but is **not yet fully vetted, so** treat it as a preview and jumping off point for further exploration.
+
+### See it in action: jaffle-logistics
+
+[`jaffle-logistics`](https://github.com/dbt-labs/jaffle-logistics) is the canonical worked
+example of this package in use. It models a fictional logistics company whose data is scattered
+across roughly eight disconnected systems (CRM, support tickets, dispatch notes, incident
+reports, legal contracts, Slack, call transcripts), and shows where exact-match SQL (joins, regex)
+runs out of road, then runs exactly this chunk → classify → embed → search pipeline to fold that
+free text into one governed, searchable knowledge base, all without leaving dbt. It builds on
+DuckDB (local, free), Snowflake, BigQuery, and Databricks, and the full story with real query
+output lives in its docs. Start there to see the package end to end on a realistic multi-source
+corpus.
+
+---
+
+## 1. Chunk
+
+`chunk` packs ordered, atomic text **units** (a turn for transcripts, a sentence for documents)
+into token-bounded chunks that never split a unit, never cross a partition key, and carry every
+unit's id into `source_rows` for lineage. Pure window SQL that is deterministic and involves zero AI cost. Defaults: `chunk_target_tokens = 512`, `chunk_overlap_tokens = 0` (opt-in overlap). See
+[ADR-0002](adr/0002-chunking-as-token-bounded-unit-packing.md) for the algorithm and research.
+
+**Why chunk at all?** Embedding models and LLMs have bounded context, and retrieval quality
+depends on chunks being coherent (one topic, not half of two). Naively cutting text every N
+characters splits sentences and destroys meaning. `chunk` packs whole units up to a token budget and stops, so a chunk is always made of complete turns or sentences, and always knows which source rows it came from.
 
 ```sql
 -- Package macros are called qualified with the package name (dbt convention, like dbt_utils.*).
@@ -77,40 +73,19 @@ See ADR-0002 for the algorithm + research.
 ) }}
 ```
 
-### Splitting long text (`split_sentences`) — layer-1 staging
+Output columns: `chunk_id, partition_key, chunk_seq, source_rows, chunk_text, n_source_rows, token_estimate`. Every chunk carries its source ids, as with all dbt work, lineage is non-negotiable.
 
-`chunk` *packs* pre-split units; it does not *split* a blob. For documents that arrive as one
-big text, `split_sentences` is the staging step that turns one text row into one row per
-sentence (`sentence_id, document_id, sentence_index, sentence_text`), which you then feed to
-`chunk` (unit = sentence). Deterministic, zero AI. Boundary rule is naive (`. ! ?`) and
-over-splits abbreviations — for prose that needs better boundaries, split with a real tokenizer
-upstream. Transcripts skip this: they already arrive as one row per turn.
+### Splitting long text first (`split_sentences`)
+
+`chunk` *packs* pre-split units; it does not *split* a blob. Transcripts already arrive as one
+row per turn, so they feed `chunk` directly. Documents that arrive as one big piece of text need a staging step first: `split_sentences` turns one text row into one row per sentence
+(`sentence_id, document_id, sentence_index, sentence_text`), which you then feed to `chunk`
+(unit = sentence). Deterministic, zero AI. The boundary rule is naive (`. ! ?`) and identical on
+every engine, so a corpus splits the same everywhere; for prose that needs better boundaries,
+split with a real tokenizer upstream.
 
 ```sql
 -- documents -> sentences -> token-bounded chunks
-{{ dbt_context_engineering.split_sentences(
-    relation    = ref('stg__documents'),
-    id_column   = 'document_id',   -- lineage -> document_id + sentence_id
-    text_column = 'document_text'
-) }}
-```
-
-Deterministic tests run on **duckdb** (no cloud credentials): `integration_tests/duckdb`. Both
-`chunk` and the `split_sentences → chunk` pipeline are also confirmed live on all three
-cloud engines.
-
-### Metadata on chunks (`attach_metadata`)
-
-`chunk` and `split_sentences` know nothing about metadata, and stay that way on
-purpose. Carrying a source-level field (title, a resolvable citation link, call participants)
-onto every chunk row is a `distinct` collapse and a join, plain ANSI SQL with no per-engine
-divergence to hide, so it doesn't belong inside a dispatched macro. `attach_metadata` is a
-separate, portable macro that composes with their unmodified output as a step after chunking.
-`metadata_columns` is semantically agnostic: pass frontmatter fields (customer, participants),
-provenance fields (citation_url, recording_url), or any other source-level columns.
-
-```sql
--- documents -> sentences -> token-bounded chunks (both steps unmodified)
 {{ dbt_context_engineering.split_sentences(
     relation    = ref('stg__documents'),
     id_column   = 'document_id',
@@ -118,285 +93,160 @@ provenance fields (citation_url, recording_url), or any other source-level colum
 ) }}
 ```
 
-```sql
-{{ dbt_context_engineering.chunk(
-    relation         = ref('stg_docs_split'),   -- the split_sentences output above
-    id_column        = 'sentence_id',
-    order_column     = 'sentence_index',
-    text_column      = 'sentence_text',
-    partition_column = 'document_id'
-) }}
-```
+### Carrying metadata onto chunks (`attach_metadata`)
+
+`chunk` and `split_sentences` know nothing about metadata, on purpose. Carrying a source-level
+field (title, a citation link, call participants) onto every chunk is a `distinct` collapse and a join, plain SQL with no per-engine divergence, so it lives in a separate, portable macro that composes with their unmodified output.
 
 ```sql
 -- attach title/citation_url from the ORIGINAL document-level table, joined on document_id
 {{ dbt_context_engineering.attach_metadata(
-    chunks_relation      = ref('stg_docs_chunks'),   -- the chunk output above
+    chunks_relation      = ref('stg_docs_chunks'),   -- the chunk output
     metadata_relation    = ref('stg__documents'),    -- the document-level table, pre-split
     metadata_key_column  = 'document_id',
     metadata_columns     = ['title', 'citation_url'],
-    in_text              = false                     -- default: columns only, not embedded
+    in_text              = false                      -- default: columns only, not embedded
 ) }}
 ```
 
-Same macro, different source. Call-level metadata works identically:
+Each `metadata_columns` value must be constant per key (source-level, not unit-level); the macro
+collapses `metadata_relation` with `distinct`, so a key carrying conflicting values fails the
+`chunk_id` uniqueness test rather than silently keeping one. Pass `in_text=True` to also prepend
+a `"col: value"` block to `chunk_text` so the embedding or LLM sees it (`token_estimate` is
+recomputed to match). See [ADR-0013](adr/0013-attach-metadata-as-a-separate-macro.md).
+
+---
+
+## 2. Classify
+
+`classify` puts a **typed AI label** on each chunk, a single value from a closed set (signal type, sentiment, topic, risk category). This is what makes the corpus filterable later: "everything classified `at_risk`," "only `pricing` chunks."
+
+**Prompts and schemas are code.** The label set isn't a magic string buried in SQL, it's a versioned prompt/schema pair under `prompts/`, resolved to a compile-time literal. Prompts are
+diffable, PR-reviewed, and explicitly versioned (no implicit "latest"). See
+[ADR-0001](adr/0001-prompts-and-schemas-as-versioned-macros.md).
+
+**No AI call ships unguarded.** Every AI operation pairs with `guard_batch` (a pre-hook circuit
+breaker that stops a run before it spends past a configured ceiling) and `log_ai_run` (which
+appends row count, tokens, and estimated cost to the `ai_run_log`). Cost is a first-class output,
+not an afterthought. See [ADR-0003](adr/0003-cost-as-a-first-class-output.md).
 
 ```sql
-{{ dbt_context_engineering.attach_metadata(
-    chunks_relation      = ref('stg_call_chunks'),
-    metadata_relation    = ref('stg__calls'),
-    metadata_key_column  = 'call_id',
-    metadata_columns     = ['customer', 'participants', 'recording_url']
+{{ config(
+  pre_hook  = "{{ dbt_context_engineering.guard_batch(ref('stg_chunks'), 'chunk_text') }}",
+  post_hook = [
+    "{{ dbt_context_engineering.log_ai_run('classify', model_name=var('model_classify'), relation=ref('stg_chunks'), input_column='chunk_text') }}",
+    "{{ dbt_context_engineering.complete_ai_run('classify', model_name=var('model_classify')) }}"
+  ]
 ) }}
-```
-
-Each `metadata_columns` value must be constant per key (source-level, not unit-level). The macro
-collapses `metadata_relation` with `distinct`, so a key carrying conflicting values fans out the
-join and fails the `chunk_id` uniqueness test rather than silently keeping one value. Pass
-`in_text=True` to also prepend a `"col: value"` block to `chunk_text` on every chunk, so the
-embedding or LLM sees it; `token_estimate` is recomputed to match.
-
-## The dispatch pattern
-
-Every engine-specific macro uses `adapter.dispatch`. Users call one macro; the correct
-dialect fires. `generate.sql` is the canonical reference — copy its shape. Package macros
-are called **package-qualified** (`dbt_context_engineering.*`), like `dbt_utils.*`.
-
-```sql
--- config(pre_hook="{{ dbt_context_engineering.guard_batch(ref('stg_gong__transcripts'), 'segment_text') }}")
 select
-    call_id,
+    chunk_id,
     {{ dbt_context_engineering.classify(
-        input_column  = 'segment_text',
+        input_column  = 'chunk_text',
         prompt        = dbt_context_engineering.prompt('EXAMPLE_signal_classify', 'v3'),
         output_schema = dbt_context_engineering.schema_def('EXAMPLE_signal_classify', 'v3')
     ) }} as signal
-from {{ ref('stg_gong__transcripts') }}
+from {{ ref('stg_chunks') }}
 ```
 
-`prompt`/`schema` resolve versioned prompt macros (under `prompts/`) to compile-time
-literals; `guard_batch` is the pre-hook circuit breaker so no AI call runs unguarded.
-Prompt/guard/chunking logic is validated on duckdb; the AI calls have executed on all three cloud
-engines against mock sample data.
+`classify` returns the chosen label as a **scalar string** on all three engines. The divergent return shapes (Snowflake VARIANT, Databricks JSON, BigQuery STRUCT) are normalized behind the wrapper, so downstream models never branch on the engine. The schema's `enum` is the taxonomy;
+`conforms_to_schema` (see [Trust](#trust-making-the-context-testable)) can later assert the column
+only ever holds values from that enum, catching an invented label.
 
-### Reading the AI result back — `text` / `field`
+---
 
-The wrappers normalize how you *call* the model, but the raw return **shape** still differs per
-engine (Snowflake VARIANT object, Databricks JSON string, BigQuery STRUCT). Two accessors make
-the output portable too, so downstream models never branch on the engine:
+## 3. Embed
+
+`embed` turns each chunk into a vector so it can be searched by meaning rather than keyword. The
+model is pinned via the `embedding_model` var. A corpus embedded by one model can't be searched by another, so the model identity is explicit and enforced.
 
 ```sql
--- models/signals.sql — call once (structured), then flatten to typed scalars
-with raw as (
-    select
-        call_id,
-        {{ dbt_context_engineering.generate('segment_text',
-            dbt_context_engineering.prompt('EXAMPLE_signal_classify','v3'),
-            dbt_context_engineering.schema_def('EXAMPLE_signal_classify','v3')) }} as result
-    from {{ ref('stg_gong__transcripts') }}
-)
 select
-    call_id,
-    {{ dbt_context_engineering.field('result', 'signal') }}   as signal,     -- typed scalar, any engine
-    {{ dbt_context_engineering.field('result', 'evidence') }} as evidence
-from raw
+    chunk_id,
+    {{ dbt_context_engineering.embed('chunk_text') }} as embedding
+from {{ ref('stg_chunks_classified') }}
 ```
 
-- `text(result)` — plain text of an **unstructured** `generate` (no schema).
-- `field(result, 'name', as_type)` — one field out of a **structured** result (`generate`
-  with a schema, or `extract`), cast to `as_type` (defaults to string). Flatten with this
-  before `conforms_to_schema`. `embed` is the exception — it already returns a usable vector.
+**Embeddings are expensive to recompute, so this is where the package earns its keep as a
+production pattern.** A trustworthy embedding table only re-embeds what actually changed, catches
+a chunk whose source text changed even when the model didn't, re-embeds the whole corpus on a
+model bump, guards cost, logs every run, and stamps enough metadata to tell whether a stored
+vector still matches what would be produced today. The package ships a governed incremental
+pattern that does all of this with no custom materialization:
 
-## Governed incremental AI model (Phases 2–4 together)
-
-The full pattern processes only new rows, catches a row whose source text changed even when the
-model/version didn't, re-embeds on a version bump, guards cost, logs every run, and stamps the
-six-column metadata set an embedding needs to be a trustworthy cache entry rather than an opaque
-vector (see ADR-0023).
-
-`content_hash` has to be a real column somewhere upstream of the embedding model, not a same-`SELECT`
-alias filtered on in the same query (BigQuery won't resolve that) and not something `guard_batch`/
-`log_ai_run` can meter unless their `relation` actually carries it. A small staging model is that
-column's one home:
+- **`content_hash`**: hash the exact string handed to `embed()` so a changed chunk is detected
+  even when its key already exists.
+- **`version_guard`** / **`embedding_fn_fingerprint`**: a model/dimension/provider-parameter bump
+  re-embeds the whole corpus; a `unique_key` merge replaces the old rows.
+- **`incremental_delta_predicate`**: one source of truth so the model body's `where`, the
+  guard's `filter`, and the log's `filter` all describe the same batch and can't drift.
 
 ```sql
--- models/stg_docs_hashed.sql
-{{ config(materialized = 'view') }}
-
-select
-    doc_id,
-    body,
-    {{ dbt_context_engineering.content_hash('body') }} as content_hash
-from {{ ref('stg_docs') }}
-where body is not null and length(trim(body)) > 0   -- see the null-handling note below
-```
-
-```sql
--- models/doc_embeddings.sql
+-- models/chunk_embeddings.sql  (abridged; see the full worked example in ADR-0023)
 {{ config(
-    materialized  = 'incremental',
-    unique_key    = 'doc_id',
-    pre_hook      = [
-        "{{ dbt_context_engineering.guard_batch(ref('stg_docs_hashed'), 'body',
-            filter=dbt_context_engineering.incremental_delta_predicate('doc_id',
-                dbt_context_engineering.embedding_fn_fingerprint(model=var('embedding_model')),
-                'embedding_fn_fingerprint', content_hash_column='content_hash')) }}",
-        "{{ dbt_context_engineering.log_ai_run('embed', model_name=var('embedding_model'),
-            relation=ref('stg_docs_hashed'), input_column='body',
-            filter=dbt_context_engineering.incremental_delta_predicate('doc_id',
-                dbt_context_engineering.embedding_fn_fingerprint(model=var('embedding_model')),
-                'embedding_fn_fingerprint', content_hash_column='content_hash')) }}"
+    materialized = 'incremental',
+    unique_key   = 'chunk_id',
+    pre_hook     = [
+      "{{ dbt_context_engineering.guard_batch(ref('stg_chunks_hashed'), 'chunk_text',
+          filter=dbt_context_engineering.incremental_delta_predicate('chunk_id',
+              dbt_context_engineering.embedding_fn_fingerprint(model=var('embedding_model')),
+              'embedding_fn_fingerprint', content_hash_column='content_hash')) }}",
+      "{{ dbt_context_engineering.log_ai_run('embed', model_name=var('embedding_model'),
+          relation=ref('stg_chunks_hashed'), input_column='chunk_text',
+          filter=dbt_context_engineering.incremental_delta_predicate('chunk_id',
+              dbt_context_engineering.embedding_fn_fingerprint(model=var('embedding_model')),
+              'embedding_fn_fingerprint', content_hash_column='content_hash')) }}"
     ],
-    post_hook     = "{{ dbt_context_engineering.complete_ai_run('embed', model_name=var('embedding_model')) }}"
+    post_hook    = "{{ dbt_context_engineering.complete_ai_run('embed', model_name=var('embedding_model')) }}"
 ) }}
 {% set fingerprint = dbt_context_engineering.embedding_fn_fingerprint(model=var('embedding_model')) %}
-{% set delta = dbt_context_engineering.incremental_delta_predicate('doc_id', fingerprint,
+{% set delta = dbt_context_engineering.incremental_delta_predicate('chunk_id', fingerprint,
     'embedding_fn_fingerprint', content_hash_column='content_hash') %}
 select
-    doc_id,
-    '{{ var("embedding_model") }}'                          as model_version,     -- audit only, see below
+    chunk_id,
     content_hash,
-    {{ dbt_context_engineering.embed('body') }}             as embedding,
-    {{ dbt_context_engineering.embedding_dimension(dbt_context_engineering.embed('body')) }} as embedding_dimension,
-    '{{ fingerprint }}'                                     as embedding_fn_fingerprint,
-    '{{ run_started_at }}'                                  as embedded_at,
-    '{{ dbt_context_engineering.embedding_logic_hash() }}'  as embedding_logic_hash  -- audit only, see below
-from {{ ref('stg_docs_hashed') }}
-{% if delta %}where {{ delta }}                            -- delta only; skipped on first build / --full-refresh / fingerprint bump
-{% endif %}
+    {{ dbt_context_engineering.embed('chunk_text') }} as embedding,
+    '{{ fingerprint }}'                               as embedding_fn_fingerprint,
+    '{{ run_started_at }}'                            as embedded_at
+from {{ ref('stg_chunks_hashed') }}
+{% if delta %}where {{ delta }}{% endif %}
 ```
 
-`version_guard` (via `incremental_delta_predicate`'s `version`/`version_column` args) returns True
-(reprocess all) on first build, `--full-refresh`, or when the stored `embedding_fn_fingerprint`
-differs from the one just computed, so a model/dimension/provider-parameter bump re-embeds the
-whole corpus, and the `unique_key` merge replaces the old rows. No custom materialization, and no
-code change to `version_guard`/`incremental_delta_predicate` was needed to point them at the
-fingerprint instead of a bare model-version string, both already compare an arbitrary
-`(value, column)` pair. `model_version` keeps being stamped anyway, purely for human debugging,
-denormalized and redundant with the fingerprint the same way the source doc keeps a plain model
-name column even once a real cache key exists. `embedding_logic_hash()` is the same kind of audit
-column for a different axis: which build of `embed()`'s own logic produced the row (see the macro
-reference below); neither one ever gates reprocessing.
+The full mechanism, why `content_hash` needs a real upstream column, the pre-/post-hook rules for
+`log_ai_run`, why the delta uses a dispatched row-value `NOT IN` instead of a correlated subquery, and the null-text handling, is documented in [ADR-0004](adr/0004-version-aware-incremental-refresh.md) and [ADR-0023](adr/0023-embedding-metadata-and-content-hash-delta.md) so this README stays readable.
+If you're just getting started, `embed()` on its own (no incremental config) works fine; adopt the
+governed pattern when recompute cost starts to matter.
 
-**Guard AND log the delta, not the corpus, from one source of truth.** The body's `where`, the
-guard's `filter`, and the log's `filter` must all describe the same batch, or they drift.
-`incremental_delta_predicate(...)` returns that predicate once (or `none` when the whole corpus
-reruns), so all three agree. Without it: the guard counts the full source and, once the corpus
-passes `max_batch_rows`, every incremental run false-trips even for a few new rows; and the log
-records the whole corpus every run, so `row_count`/`est_cost` are wrong by orders of magnitude.
+---
 
-**A row whose key already exists but whose source text changed is a gap the key-existence check
-alone can't see**, and `version_guard`'s full-corpus reprocess is the wrong tool for a single
-changed row. `content_hash_column` closes it: `incremental_delta_predicate` OR's a row-value
-comparison via the dispatched `row_value_not_in()` helper onto the key-existence check, not a
-correlated subquery. A correlated form (`content_hash != (select ...)` or `not exists (select ...
-where t.doc_id = doc_id)`) is a real trap: an unqualified column inside a correlated subquery
-resolves to the subquery's *own* same-named column, not the outer row, whenever the inner table
-has a column by that name, which it always will here, so both correlated forms return wrong
-answers. Row-value `NOT IN` needs no alias or correlation at all, so there's nothing to shadow. A
-row whose current hash is null evaluates the whole tuple comparison to null (duckdb) or false
-(Snowflake, Databricks), both mean "excluded" for `WHERE`-clause purposes, so `WHERE` excludes it
-and the row's last-known-good embedding stays frozen rather than getting nulled or deleted, on
-purpose: a source going null could mean "retract this" or "transient load hiccup," and this
-package can't know which, so it doesn't guess.
+## 4. Search
 
-**`row_value_not_in()` is its own dispatched primitive because the row-value comparison itself
-diverges per engine.** BigQuery rejects the plain form (`(a, b) not in (select a, b from t)`,
-`"Subquery of type IN must have only one output column"`) and needs its subquery's `SELECT` list
-wrapped as a single tuple; that wrapped form is in turn rejected by both Snowflake and Databricks.
-Isolated in `macros/incremental/row_value_not_in.sql`, the same `array_agg`/`contains`-style
-pattern this package already uses everywhere else for per-engine divergence. See ADR-0023 for the
-full reasoning.
-
-**The null/empty-text guard in `stg_docs_hashed` above is documentation, not a package macro**,
-and it protects a narrower case than it looks like it should. A row whose text goes null *after* a
-successful embed needs no guard at all, freshly-computed null `content_hash` compared against a
-stored value is null under three-valued logic, so `WHERE` excludes it automatically, the frozen
-behavior above. What the guard actually protects is a row that's *never* been embedded with
-currently-null text: the key-existence check is true regardless of content (`TRUE OR ...` is
-`TRUE`), so a brand-new null-text row would otherwise still enter the delta and attempt `embed()`
-on null input. `chunk()`/`attach_metadata()` were deliberately not changed to add this, reopening
-either is scope past what a single null-text row needs.
-
-**Source-column provenance is documentation too.** `label_column`/`text_column` (`chunk`) and
-`metadata_columns`/`in_text` (`attach_metadata`) already exist as literal call-site arguments, so
-the information is technically present, just in the source of whichever upstream model built the
-chunks, not anywhere a consumer looking at the embeddings table would think to check. Name which
-source columns and calls fed `embedding`/`chunk_text` in that column's `.yml` `description`,
-surfaced natively through `dbt docs generate`, rather than building anything new.
-
-**Which hook phase `log_ai_run` needs depends on what `relation`/`filter` actually reference, not
-on preference.** Three cases:
-
-1. `relation` is an explicit ref() to some OTHER table (a source, not `this`), and `filter` (if
-   any) doesn't reference `this`. Either pre-hook or post-hook works; that other table's state
-   doesn't depend on THIS model's build.
-2. `relation` left at its default (`this`), sizing from the model's OWN output, no `filter`.
-   Requires a post-hook. Pre-hook runs before the create/merge, so `this` doesn't exist yet on a
-   first build (errors) and holds last run's stale state on later builds either way. Only sound
-   on a `table` (or always-fully-rebuilt) materialization, where "the freshly built output" and
-   "this run's batch" are the same thing.
-3. `filter` derived from `this` (e.g. `incremental_delta_predicate`, which expands to
-   `<unique_key> not in (select <unique_key> from {{ this }})`), the delta-scoping pattern on an
-   incremental model. Requires a pre-hook. By the time a post-hook fires, this run's merge has
-   already landed the new rows into `this`, so that same predicate finds nothing and logs
-   `row_count = 0` for a run that really processed rows.
-
-The example above is case 3, so `guard_batch` and `log_ai_run` both run as pre-hooks, in the same
-phase as each other and as the model body's own delta `where`, all reading the same pre-merge
-state. Never combine case 2 with an incremental model (unfiltered `relation=this` on an
-incremental); it's wrong in both phases, not risky in just one. Pre-hook reports last run's
-state, missing this run's rows entirely. Post-hook reports the whole cumulative table, every row
-ever merged in, not this run's batch.
-
-Note the pre-hook meters `relation=ref('stg_docs_hashed')`, not `this`; the token estimate reads
-`body`, which exists in that staging model but not in `doc_embeddings`'s own output (`doc_id,
-model_version, content_hash, embedding, embedding_dimension, embedding_fn_fingerprint,
-embedded_at, embedding_logic_hash`). `this`, `is_incremental()`, and `version_guard()` all resolve
-inside pre-/post-hooks, verified on duckdb (`guard_delta`, `logged_delta`, and
-`content_hash_delta`, which exercises the exact two-build, real-content-hash-delta scenario above
-end to end, including the row-value `NOT IN` predicate inside `guard_batch`'s own aggregate
-cost-estimate query) and mirrored on all three cloud warehouses
-(`content_hash_delta_sf`/`_dbx`/`_bq`).
-
-**`ai_run_log` tracks each row's lifecycle in a `completed` boolean.** `false` when `log_ai_run`
-inserts it, flipped to `true` once `complete_ai_run`'s post-hook confirms the model finished. If
-the model errors before reaching that post-hook, the row simply stays `false`. `complete_ai_run`
-is always safe as a post-hook, even when `log_ai_run` runs as a pre-hook per the rule above; its
-`UPDATE` is keyed on `invocation_id`/`function_name`/`model_name`, never on `this`. `log_ai_run`
-also creates `ai_run_log` itself the first time it fires against a target that doesn't have it
-yet, so a `dbt run --select <one_model>` that never selects `ai_run_log` still has somewhere to
-write.
-
-## Retrieval (Phase 5)
-
-`vector_search` ranks a corpus by cosine similarity to a query vector — brute-force over the
-embedding **column** by default (no index needed), which is the portable, governed baseline:
+`vector_search` ranks the embedded corpus by cosine similarity to a query vector, brute-force over the embedding **column** by default (no index needed), which is the portable, governed
+baseline. This is the retrieval step an agent calls to pull the most relevant passages, now
+filterable by the classification label from step 2 and carrying the lineage from step 1.
 
 ```sql
 {{ dbt_context_engineering.vector_search(
-    relation        = ref('doc_embeddings'),
-    embedding_column= 'embedding',
-    query_embedding = dbt_context_engineering.embed('search text'),  -- or an array literal
-    top_k           = 10,
-    id_column       = 'doc_id'
+    relation         = ref('chunk_embeddings'),
+    embedding_column = 'embedding',
+    query_embedding  = dbt_context_engineering.embed('renewal risk'),  -- or an array literal
+    top_k            = 10,
+    id_column        = 'chunk_id',
+    select_columns   = ['signal', 'citation_url'],
+    filter           = "signal = 'at_risk'"
 ) }}
 ```
 
-For scale, `create_vector_index` (opt-in, `dbt run-operation` **only** — never a model) builds
-the engine's external index/service (Snowflake Cortex Search, BigQuery vector index). These are
-separately-billed, stateful objects with idle-serving cost and their own lifecycle — drop them
-explicitly. Databricks indexes are created via its Vector Search API, not SQL.
+Ranking has a secondary sort on `id_column`, so rows tied on score (common with near-duplicate
+chunks) are stable across runs and engines. See
+[ADR-0005](adr/0005-retrieval-brute-force-default-index-opt-in.md).
 
-## Knowledge base (Phase 6)
+### Searching across many sources at once (`knowledge_base`)
 
-`knowledge_base` unifies multiple pre-embedded sources (tickets, calls, notes, …) into one
-mart with a common shape (`source_type, source_id, account_key, text, embedding, ts,
-citation_url, classification`), so a single search answers "everything about account X" across
-systems, with per-source lineage, a resolvable citation link, and a `classify()` label carried
-into results. **Register a new source** by adding one dict to the list; `citation_url` and
-`classification` are each optional per source, independently (omit either for a source with no
-resolvable link / no classify() label and that source's rows get `NULL` for the omitted one):
+Real questions span systems: "everything about account X" means tickets *and* calls *and* notes.
+`knowledge_base` unions multiple pre-embedded sources into one mart with a common shape
+(`source_type, source_id, account_key, text, embedding, ts, citation_url, classification`), so a
+single `vector_search` answers across all of them with per-source lineage, a resolvable citation
+link, and the `classify()` label carried into results. Register a source by adding one dict:
 
 ```sql
 -- models/knowledge_base.sql
@@ -405,414 +255,289 @@ resolvable link / no classify() label and that source's rows get `NULL` for the 
      'source_id': 'ticket_id', 'account_key': 'account_id',
      'text': 'body', 'embedding': 'embedding', 'timestamp': 'created_at',
      'citation_url': 'ticket_url', 'classification': 'category'},
-    {'relation': ref('stg_calls'),   'source_type': 'call',
-     'source_id': 'call_id',   'account_key': 'account_id',
+    {'relation': ref('stg_calls'), 'source_type': 'call',
+     'source_id': 'call_id', 'account_key': 'account_id',
      'text': 'transcript', 'embedding': 'embedding', 'timestamp': 'call_time',
      'citation_url': 'call_url'}
 ]) }}
 ```
 
-Then account-scoped retrieval across all sources at once, optionally faceted by classification:
+All sources must share one embedding model (`version_guard` enforces it). See
+[ADR-0006](adr/0006-knowledge-base-union-to-common-shape.md) and
+[ADR-0027](adr/0027-classification-as-a-second-privileged-knowledge-base-column.md).
+[`jaffle-logistics`](https://github.com/dbt-labs/jaffle-logistics) builds exactly this: one
+`knowledge_base` unioning five independent source chains (legal docs, incident reports, CRM notes,
+call transcripts, support tickets) into a single searchable mart.
 
-```sql
-{{ dbt_context_engineering.vector_search(
-    relation=ref('knowledge_base'), embedding_column='embedding',
-    query_embedding=dbt_context_engineering.embed('renewal risk'),
-    id_column='source_id', select_columns=['source_type', 'citation_url', 'classification'],
-    filter="account_key = 'acme' and classification = 'at_risk'") }}
-```
+---
 
-All embeddings must come from the same model (see `version_guard`). A managed hybrid index
-over the mart is the opt-in scale step (`create_vector_index`).
+## Trust: making the context testable
 
-## Context evaluation & groundedness (Phase 7)
+Context is only useful if it's *trustworthy*. Three deterministic tests make AI outputs testable like any other dbt object, no warehouse, no AI spend, and round out the core pattern. See [ADR-0007](adr/0007-context-evaluation-and-groundedness.md).
 
-Context is only useful if it's *trustworthy*. Phase 7 makes AI outputs testable like any other
-dbt object — deterministic, no warehouse, no AI spend.
-
-**`grounded`** — a generic (schema.yml) test asserting each row's evidence/quote actually
-appears in its source text, so a hallucinated quote fails the build. Normalization (case-fold +
-whitespace-collapse) defaults on; set both false for byte-exact grounding.
+- **`grounded`** *(generic test)*: asserts each row's evidence/quote actually appears in its
+  source text, so a hallucinated quote fails the build.
+- **`conforms_to_schema`** *(singular-test macro)*: asserts a classify/extract column only holds
+  values from the enum its schema declares, catching an invented label. The allowed set is
+  resolved from the same schema macro the wrapper used, so it can't drift into a hand-copied list.
 
 ```yaml
+# schema.yml: grounding a classify/extract evidence column
 columns:
   - name: evidence
     tests:
       - dbt_context_engineering.grounded:
-          source_text_column: segment_text   # ignore_case / normalize_whitespace / allow_empty are optional
+          source_text_column: chunk_text
 ```
 
-**`conforms_to_schema`** — a singular-test macro asserting a classify/extract column only holds
-values from the enum declared by its `schema`, catching invented labels. The allowed set is
-resolved from the same schema macro the wrapper used, so it can never drift into a hand-copied
-list. (It's a macro rather than a generic test because resolving a versioned schema by name needs
-`schema`'s dynamic dispatch, which only renders in model/singular-test context.)
+---
 
-```sql
--- tests/assert_signals_conform.sql
-{{ dbt_context_engineering.conforms_to_schema(ref('signals'), 'signal',
-                                                 'EXAMPLE_signal_classify', 'v3') }}
-```
+## This is a seed
 
-**`eval`** — scores predicted labels against a golden/expected column, emitting tidy
-`metric, label, value` rows (accuracy + per-label precision/recall). It reads pre-computed
-predictions, so it runs with zero AI spend; wrap it in a model and threshold a metric with a test
-to gate a prompt/model change. Pass `prompt_version` to stamp rows and snapshot metrics over time
-for drift tracking.
+This package is the **seed of a larger open-source effort**, not a finished product. The chunk → classify → embed → search spine is the part we're confident in and are focusing on first. Around it there's a wider surface including group-level aggregation, managed vector indexes, runtime drift monitoring, and more AI operations, that is built but **not yet fully vetted**.
 
-```sql
--- models/signal_eval.sql
-{{ dbt_context_engineering.eval(ref('signal_predictions'), 'predicted_label', 'expected_label') }}
-```
+We're publishing the vetted core now, in the open, so it can grow the way dbt itself did:
+through close collaboration with the **dbt community**. The intent is that practitioners on Snowflake, Databricks, and BigQuery use it on real corpora, tell us where it breaks, contribute the patterns they've had to rebuild by hand, and help decide what graduates from preview into the supported core. Issues, PRs, and pattern proposals are all welcome. This toolkit gets more useful the more the community shapes it. [`jaffle-logistics`](https://github.com/dbt-labs/jaffle-logistics) is the reference project we grow alongside the package, the place we prove new patterns on a realistic multi-source corpus before they graduate.
 
-All three are validated end to end on duckdb (both pass and catch directions). The only
-per-engine divergence is the containment / whitespace primitives (`contains`,
-`collapse_ws`), isolated behind dispatch — see ADR-0007.
+---
 
-## Runtime drift monitoring (`embedding_canary`)
+## Beyond the core pattern (not fully vetted)
 
-`embedding_fn_fingerprint` and `embedding_logic_hash` (above) catch a model/config change or a
-package-code change; neither can see a provider silently swapping a pinned model's behavior
-underneath an unchanged config, weeks after this package last shipped. `embedding_canary`
-re-embeds a small fixed probe set and compares it against a blessed baseline by **cosine
-similarity**, the same measure `vector_search` already uses to rank results, so that kind of
-drift shows up as a red test (`assert_embedding_canary_matches_baseline`) instead of something a
-human has to already suspect. See ADR-0026 for the full design, including the live measurement
-that ruled out an exact-match comparison (the same probe, re-embedded, lands on a small number of
-distinct vectors differing by a few thousandths, not one fixed value).
+These pieces are built and exercised on all three engines, but they're **in beta,** larger surface area, more per-engine divergence, or narrower validation. Use them, but expect the edges to move as the community weighs in. They are not part of the focused chunk → classify → embed → search story above.
 
-**Disabled by default** (`monitoring: +enabled: false`). Installing this package adds no
-automatic cost; the canary makes real `embed()` calls every time it runs. To use it:
+- **`generate`** / **`extract`**: the other two row-level AI operations. `generate` is free-form
+  generation (plain text or a structured object); `extract` pulls a typed record of fields present
+  in the text. `classify` (in the core pattern) covers the closed-set-label case; reach for these
+  when you need free text or a multi-field typed extraction. See
+  [ADR-0010](adr/0010-four-ai-operations.md). Read structured results back portably with
+  `text()` / `field()` ([ADR-0008](adr/0008-normalizing-ai-output.md)).
+- **`ai_agg`**: group-level aggregation (summarize a whole transcript, roll up sentiment across
+  an account). Cross-adapter behavior diverges the most here; pair with `guard_agg_batch` on
+  Databricks. See [ADR-0028](adr/0028-add-ai-agg-group-level-aggregation.md).
+- **`create_vector_index`**: opt-in, `dbt run-operation` **only** (never a model). Builds the
+  engine's external, separately-billed index/service (Snowflake Cortex Search, BigQuery vector
+  index; Databricks via its Vector Search API) for scale beyond the brute-force default. Stateful,
+  with idle-serving cost, so drop it explicitly. See
+  [ADR-0005](adr/0005-retrieval-brute-force-default-index-opt-in.md).
+- **`embedding_canary`**: runtime drift monitor. Re-embeds a small fixed probe set and compares
+  it against a blessed baseline by cosine similarity, catching a provider silently changing a
+  pinned model's behavior. **Disabled by default** (`monitoring: +enabled: false`); it makes real
+  `embed()` calls, so add it only to a scheduled production job. See
+  [ADR-0026](adr/0026-embedding-canary-runtime-drift-monitor.md).
 
-```yaml
-# your dbt_project.yml
-models:
-  dbt_context_engineering:
-    monitoring:
-      +enabled: true
-```
+---
 
-Then add `embedding_canary` (or `--select tag:embedding_canary`) to your **own scheduled
-production job**, not your default or dev build command. The canary only detects drift by
-comparing two runs spaced apart in time; running it on every ad-hoc dev build charges you the
-same `embed()` cost repeatedly without improving the odds of catching anything, since real drift
-happens on the provider's own schedule, not yours.
+## Status & testing
 
-On Snowflake, also set `embedding_canary_vector_dimension` to your `embedding_model`'s output
-dimension (`VECTOR`'s dimension is part of its type and Snowflake requires a literal there).
+The full toolkit is built: chunking, AI function wrappers, the prompt/schema library, the cost
+guard and run log, the incremental pattern + `version_guard`, retrieval, the knowledge base, and
+context evaluation.
+
+Testing posture: the cloud AI calls (`generate`, `classify`, `extract`, `embed`, `vector_search`)
+have **executed successfully on all three engines** (Snowflake, Databricks, BigQuery) against
+**mock sample data**, alongside **full deterministic execution on duckdb** of chunking, prompt
+resolution/rendering, the cost guard, and the AI run log. Not yet validated: execution against
+real production data at scale, and cost reconciliation against engine usage tables (built,
+`LIVE-VALIDATION DEFERRED`).
+
+**How to run the tests in each environment and what to check is in** [`TESTING.md`](TESTING.md)**. The *why* behind each design choice is recorded as ADRs in** [`adr/`](adr/README.md)**.**
+
+---
 
 ## Macro reference
 
-Every public object in the package. All are called **package-qualified**
-(`dbt_context_engineering.<name>(...)`), like `dbt_utils.*`. Args shown with `=` have defaults.
+Every public object. All are called **package-qualified** (`dbt_context_engineering.<name>(...)`),
+like `dbt_utils.*`. Args shown with `=` have defaults.
 
-### Prompts & schemas
+### Core pattern
 
-**`prompt(name, version)`** — resolves the versioned prompt macro
-`prompt__<name>__<version>` (under `prompts/`) to a compile-time string literal. Explicit
-versions only — no implicit "latest".
-```sql
-dbt_context_engineering.prompt('EXAMPLE_signal_classify', 'v3')
-```
+#### Chunking
 
-**`schema(name, version)`** — same, for the output JSON schema macro
-`schema__<name>__<version>`. The schema's `enum` is the taxonomy; it should include an
-evidence/quote field so every extracted fact carries its source text.
+**`chunk(relation, id_column, order_column, text_column, partition_column=none, label_column=none, target_tokens=none, overlap_tokens=none, join_separator='\n')`**: packs ordered atomic *units*
+into token-bounded chunks that never split a unit or cross `partition_column`, carrying each unit's
+id into `source_rows` (lineage). Deterministic, no AI. Output: `chunk_id, partition_key, chunk_seq, source_rows, chunk_text, n_source_rows, token_estimate`.
 
-**`render_prompt(prompt, input_column)`** — turns a resolved prompt into a portable SQL string
-expression, substituting the `{{ input }}` placeholder with the row's input column. Placeholder
-matching is whitespace-tolerant (`{{input}}`, `{{ input }}`, `{{  input  }}` all substitute), so a
-stray space never silently sends the literal placeholder to the model. A `none` prompt raises a
-clear error — `generate`/`classify`/`extract` all need a resolved prompt (the input is injected via
-its placeholder). Used internally by every AI wrapper; call it directly only if you're hand-building
-a prompt expression.
-
-**`augment_prompt(prompt, output_schema)`** — prepends an explicit "allowed values" block for
-each `enum` field in the schema. Used by the **BigQuery** wrappers so the model is constrained even
-though BigQuery's `output_schema` can't carry an enum (Snowflake/Databricks enforce it natively).
-No-op when there's no enum. You normally don't call this directly.
-
-### AI functions
-
-The four row-level AI operations. Each takes an `input_column` (a column name as a string), a
-resolved `prompt`, an optional `output_schema`, and an optional `model` (defaults to the matching
-`model_*` var). Each returns a SQL expression you place in a `select`.
-
-**`generate(input_column, prompt, output_schema=none, model=none)`** — free-form generation.
-Returns plain text, or a structured object if you pass `output_schema`. The general-purpose one.
-
-**`classify(input_column, prompt=none, output_schema=none, model=none)`** — single-label
-classification. `output_schema` is **required**; its `enum` is the label set. Returns the chosen
-label as a **scalar string** on all three engines.
-
-**`extract(input_column, prompt=none, output_schema=none, model=none)`** — typed extraction.
-`output_schema` is **required** (the extraction contract); returns a structured record with all its
-fields. Use it to pull fields *present in the text* (include an `evidence` field for groundedness).
-
-**`embed(input_column, model=none)`** — row-level embedding. Returns a vector column. The model
-is pinned via `embedding_model` (a corpus embedded by one model can't be searched by another).
-
-```sql
--- classify (scalar label) + guard + log, the governed pattern
-{{ config(
-  pre_hook  = "{{ dbt_context_engineering.guard_batch(ref('stg'), 'text') }}",
-  post_hook = [
-    "{{ dbt_context_engineering.log_ai_run('classify', model_name=var('model_classify'), relation=ref('stg'), input_column='text') }}",
-    "{{ dbt_context_engineering.complete_ai_run('classify', model_name=var('model_classify')) }}"
-  ]
-) }}
-select id,
-  {{ dbt_context_engineering.classify('text',
-      dbt_context_engineering.prompt('EXAMPLE_signal_classify','v3'),
-      dbt_context_engineering.schema_def('EXAMPLE_signal_classify','v3')) }} as signal
-from {{ ref('stg') }}
-```
-
-#### generate vs. classify vs. extract — which to use
-
-They overlap when handed the same schema, but the intent differs:
-
-| | `generate` | `classify` | `extract` |
-|---|---|---|---|
-| Returns | free text, or a structured object | one **scalar label** | a **typed record** (all schema fields) |
-| `output_schema` | optional | required (its `enum` = labels) | required (the contract) |
-| Native fn (SF / DBX / BQ) | `AI_COMPLETE` / `ai_query` / `AI.GENERATE` | `AI_CLASSIFY` / `ai_classify` / `AI.GENERATE` | `AI_EXTRACT` / `ai_query` / `AI.GENERATE` |
-| Intent | may invent/summarize | pick from a closed set | pull what's in the text (grounded) |
-
-Reach for **classify** when you only need the bucket; **extract** when you need the label *plus* a
-quote or several typed fields; **generate** for free text (summary, rewrite, answer) or a bespoke
-JSON. `generate` + a schema and `extract` overlap (on BigQuery they're the same call); extract
-is the "schema is the point / stay grounded" specialization that maps to dedicated extract functions.
-
-### Group-level aggregation (`ai_agg`)
-
-**`ai_agg(input_column, prompt, order_column=none, model=none)`** asks an LLM to reason across an
-entire `GROUP BY` group at once, summarize a call transcript, roll up sentiment across an account's
-tickets, rather than row by row. Unlike the four operations above, `prompt` is a plain instruction
-string, not a template with an `{{ input }}` placeholder.
-
-Cross-adapter behavior genuinely diverges here, more than for the four row-level operations. See
-[ADR-0028](adr/0028-add-ai-agg-group-level-aggregation.md) for the full
-live-validation evidence:
-
-| | Snowflake (`AI_AGG`) | Databricks (composition) | BigQuery (`AI.AGG`) |
-|---|---|---|---|
-| `model` | no-op, engine picks internally | honored | honored |
-| `order_column` | no-op, pre-sort your own `FROM` clause instead | honored | confirmed no-op |
-| Oversized group | handled internally (map-reduce) | not handled, guard it yourself | handled internally (map-reduce) |
-
-On Databricks, `ai_agg` has no protection against a group whose text exceeds the model's context
-window, unlike the native functions on the other two engines. Pair it with `guard_agg_batch`:
-
-```sql
-{{ config(
-  pre_hook = "{{ dbt_context_engineering.guard_agg_batch(ref('utterances'), 'utterance_text', 'call_id') }}"
-) }}
-select
-  call_id,
-  {{ dbt_context_engineering.ai_agg('utterance_text',
-      'Summarize this call in one sentence.', order_column='turn_index') }} as call_summary
-from {{ ref('utterances') }}
-group by call_id
-```
-
-### Reading AI output back
-
-The wrappers normalize the *call*; these normalize the *result* (Snowflake VARIANT / Databricks
-JSON string / BigQuery STRUCT). `classify` and `embed` already return usable scalars/vectors.
-
-**`text(ai_result)`** — the plain text of an **unstructured** `generate` (no schema).
-
-**`field(ai_result, field, as_type=none)`** — one field out of a **structured** result
-(`generate` with a schema, or `extract`), cast to `as_type` (defaults to string). Flatten with
-this before `conforms_to_schema`.
-```sql
-{{ dbt_context_engineering.field('result', 'signal') }} as signal
-```
-
-### Chunking
-
-**`chunk(relation, id_column, order_column, text_column, partition_column=none, label_column=none, target_tokens=none, overlap_tokens=none, join_separator='\n')`** — packs ordered atomic *units*
-(rows) into token-bounded chunks that never split a unit or cross `partition_column`, carrying each
-unit's id into `source_rows` (lineage). Deterministic, no AI. Defaults: `target_tokens=512`,
-`overlap_tokens=0`. Output: `chunk_id, partition_key, chunk_seq, source_rows, chunk_text,
-n_source_rows, token_estimate`.
-
-**`split_sentences(relation, id_column, text_column)`** — splits one text row into one row per
+**`split_sentences(relation, id_column, text_column)`**: splits one text row into one row per
 sentence (`sentence_id, document_id, sentence_index, sentence_text`) to feed `chunk`. Naive
-`[.!?]` boundaries (break after every terminator run) — **identical rule on all engines**, so a
-corpus splits the same everywhere. For better splitting use a real tokenizer upstream.
+`[.!?]` boundaries, identical on all engines. For better splitting use a real tokenizer upstream.
 
-### Cost & audit
+**`attach_metadata(chunks_relation, metadata_relation, metadata_key_column, metadata_columns, in_text=false)`**: joins constant-per-key source-level columns onto chunk rows (a `distinct`
+collapse + join). `in_text=True` also prepends a `"col: value"` block to `chunk_text`.
 
-**`guard_batch(relation, input_column=none, filter=none)`** — **pre-hook** circuit breaker: counts
-rows + estimated tokens of the input and **raises before the model runs** if it exceeds
-`max_batch_rows` / `max_est_tokens`. No AI call ships without one. On an incremental model pass
-`filter` (see `incremental_delta_predicate`) so it counts the delta, not the whole corpus.
+#### Prompts & schemas
 
-**`guard_agg_batch(relation, input_column, group_by_column, filter=none)`**, the grouped
-counterpart to `guard_batch`, for `ai_agg` (ADR-0028). Sums estimated tokens **per group** and
-raises, naming the offending groups, if any exceed `max_agg_group_tokens`. Needed on Databricks,
-whose `ai_agg` composition has no internal protection against an oversized group, unlike
-Snowflake's `AI_AGG` / BigQuery's `AI.AGG`.
+**`prompt(name, version)`**: resolves the versioned prompt macro `prompt__<name>__<version>` to a
+compile-time string literal. Explicit versions only.
 
-**`estimate_tokens(text_expression)`** — a SQL expression estimating tokens (`ceil(len/4)`), no
-AI. Shared by the guard and the log.
+**`schema_def(name, version)`**: same, for the output JSON schema macro `schema__<name>__<version>`.
+The schema's `enum` is the taxonomy; include an evidence/quote field so every extracted fact
+carries its source text. (Named `schema_def`, not `schema`, as `schema` is reserved by dbt.)
 
-**`log_ai_run(function_name, model_name=none, relation=none, input_column=none, filter=none)`**,
-pre-hook or post-hook (see its docstring for the rule on which), appends one row (model, function,
-row count, est tokens/cost, timestamp, invocation id, `completed=false`) to the `ai_run_log`
-model. `relation` defaults to `this`; on an incremental model pass `filter` so it records the
-delta, not the whole corpus, and set `relation` to the source when `input_column` isn't carried
-into the model's output. Creates `ai_run_log` itself the first time it fires against a target
-that doesn't have it yet.
+**`render_prompt(prompt, input_column)`**: turns a resolved prompt into a portable SQL expression,
+substituting the whitespace-tolerant `{{ input }}` placeholder with the row's input column. Used
+internally by every AI wrapper.
 
-**`complete_ai_run(function_name, model_name=none)`**, always safe as a post-hook regardless of
-where `log_ai_run` runs. Flips the row `log_ai_run` inserted this invocation from `completed=false`
-to `true`, matched on `invocation_id`/`function_name`/`model_name`. Pass it the same
-`function_name`/`model_name` given to the paired `log_ai_run` call.
+#### Classify
 
-**`ai_run_log`** *(model)*, the append-only incremental usage/cost log `log_ai_run` writes to.
-Its `completed` column is `false` until `complete_ai_run` confirms the model finished, see above.
+**`classify(input_column, prompt=none, output_schema=none, model=none)`**: single-label
+classification. `output_schema` is **required**; its `enum` is the label set. Returns the chosen
+label as a **scalar string** on all three engines. Native fn: `AI_CLASSIFY` / `ai_classify` /
+`AI.GENERATE`.
 
-### Incremental / versioning
+**`embed(input_column, model=none)`**: row-level embedding; returns a vector column. Model pinned
+via `embedding_model`.
 
-**`version_guard(pinned_version, version_column='model_version')`** → **bool**. Returns `True`
-when an incremental model must **reprocess all rows** (first build, `--full-refresh`, the stored
-version differs from `pinned_version`, or the target table predates version stamping and has no
-`version_column` yet — the adoption case, which reprocesses and stamps rather than erroring); drive
-your model's delta `WHERE` with it and pair with a `unique_key` so a version bump re-embeds the
-whole corpus.
-```sql
-{% if not dbt_context_engineering.version_guard(var('embedding_model')) %}
-where doc_id not in (select doc_id from {{ this }})
-{% endif %}
-```
+#### Cost & audit
 
-**`incremental_delta_predicate(unique_key, version=none, version_column='model_version', content_hash_column=none)`**
-→ the delta `WHERE` predicate for an incremental AI model, or `none` when the whole corpus reruns
-(first build / `--full-refresh` / version bump). One source of truth so the body's `where`, the
-`guard_batch` `filter`, and the `log_ai_run` `filter` describe the **same** batch and can't drift.
-Pass `version` for a versioned/embedding model (gates on `version_guard`); omit it to gate on
-`is_incremental()`. Pass `content_hash_column` to also catch a row whose key already exists and
-whose version/fingerprint still matches, but whose *source text changed*, a gap the key-existence
-check alone can't see, OR'd on via the dispatched `row_value_not_in()` helper, a row-value
-comparison, not a correlated subquery (a correlated form of this predicate returns wrong answers
-whenever the same column names appear on both sides, see the governed-incremental-model section
-above). Resolves `this`/`is_incremental()`/`version_guard()` correctly inside pre-/post-hooks.
+**`guard_batch(relation, input_column=none, filter=none)`**: **pre-hook** circuit breaker: counts
+rows + estimated tokens and **raises before the model runs** if it exceeds `max_batch_rows` /
+`max_est_tokens`. No AI call ships without one. Pass `filter` on an incremental model so it counts
+the delta.
 
-**`row_value_not_in(columns, relation)`** → `(col1, col2, ...) not in (select ... from relation)`,
-dispatched because BigQuery needs the subquery's own output wrapped as a single tuple and
-Snowflake/Databricks both reject that wrapped form. Backs `incremental_delta_predicate`'s
-`content_hash_column` argument; rarely called directly.
+**`estimate_tokens(text_expression)`**: a SQL expression estimating tokens (`ceil(len/4)`), no AI.
+Shared by the guard and the log.
 
-### Embedding metadata
+**`log_ai_run(function_name, model_name=none, relation=none, input_column=none, filter=none)`**:
+pre- or post-hook (see [ADR-0022](adr/0022-log-ai-run-hook-phase-follows-what-this-means.md) for
+which one); appends one usage/cost row to `ai_run_log` (`completed=false`). Creates `ai_run_log` itself
+the first time it fires against a target that lacks it.
 
-The six-column cache-key metadata set for `embed()`, see the governed-incremental-model section
-above and ADR-0023: enough to tell whether a stored vector still matches what would be produced
-today, and to scope an incident to exactly the rows it touched, without guessing.
+**`complete_ai_run(function_name, model_name=none)`**: always safe as a post-hook; flips the row
+`log_ai_run` inserted this invocation to `completed=true`, matched on
+`invocation_id`/`function_name`/`model_name`.
 
-**`content_hash(text_expression)`**, SHA-256 of `text_expression` as a lowercase hex string on
-every engine. Hash the exact string handed to `embed()`, after chunking, after any
-`attach_metadata` `in_text` prepending, not a raw source column, or a change to assembly logic that
-doesn't touch the final string goes undetected. Needs to be a real column somewhere upstream of the
-embedding model (see the governed-incremental-model section), not a same-`SELECT` alias filtered on
-in the same query.
+**`ai_run_log`** *(model)*: the append-only incremental usage/cost log `log_ai_run` writes to.
 
-**`embedding_dimension(vector_expression)`**, the length of the vector array, **observed** from
-the actual returned value, never the dimension you configured or asked for; a Matryoshka-style
-truncation config silently changes the vector while an intent-recorded value would keep agreeing
-with your (wrong) config.
+#### Incremental / versioning (embed)
 
-**`embedding_fn_fingerprint(model=none, dimension=none, extra=none)`**, a compile-time hash
-(plain hex string) of everything that defines the `embed()` **call** besides the input text: model
-identity (`model`, defaults to `var('embedding_model')`), a configured dimension/truncation
-parameter (`dimension`, always `none` today, `embed()` has no such parameter yet, a
-forward-compatible placeholder), and any other vector-affecting provider parameter (`extra`).
-Deliberately excludes chunking/preprocessing config (any change to it that actually alters the
-text already surfaces as a `content_hash` mismatch) and code identity (see
-`embedding_logic_hash()` below). Pass this as `incremental_delta_predicate`'s `version` argument
-with `version_column='embedding_fn_fingerprint'` so a model/dimension/provider-parameter bump
-re-embeds the whole corpus; `version_guard` needs no code change to do this, it already compares an
-arbitrary `(value, column)` pair.
+**`version_guard(pinned_version, version_column='model_version')`** → **bool**: `True` when an
+incremental model must **reprocess all rows** (first build, `--full-refresh`, stored version differs,
+or no `version_column` yet). Drive your delta `WHERE` with it and pair with a `unique_key`.
 
-**`embedding_logic_hash()`**, a **generated** literal, a content hash of `embed()`'s call-graph
-closure in this package's own source (derived by walking `dbt_context_engineering.<name>(...)`
-calls starting from `embed.sql`, not hand-listed, see `ci/verify_embedding_logic_hash.py`),
-regenerated and verified by this repo's own CI on every change. Scoped to that closure specifically,
-not this package's identity as a whole; a change to unrelated logic elsewhere in the package won't
-move this hash. Audit column only, never a fingerprint input, never gates reprocessing, answers
-"which build of `embed()`'s own logic produced this row" the rare time that's needed, without
-forcing every embedding model to reprocess on every unrelated package release the way folding it
-into the fingerprint would. It's a hash of source bytes, not of behavior, so most edits inside the
-closure change it without changing any vector already produced; see ADR-0025 for why that's also
-the reason it stays an audit column rather than a blocking check.
+**`incremental_delta_predicate(unique_key, version=none, version_column='model_version', content_hash_column=none)`** → the delta `WHERE` predicate (or `none` when the whole corpus reruns).
+One source of truth for the body's `where`, the guard's `filter`, and the log's `filter`. Pass
+`content_hash_column` to also catch a row whose key exists but whose *source text changed*.
 
-### Retrieval & knowledge base
+**`row_value_not_in(columns, relation)`** → dispatched row-value `NOT IN`; backs
+`incremental_delta_predicate`'s `content_hash_column`. Rarely called directly.
 
-**`vector_search(relation, embedding_column, query_embedding, top_k=10, id_column=none, select_columns=none, filter=none)`** — ranked cosine similarity over an embedding **column**
-(brute-force; no index). Returns `[id_column, select_columns..., score]` ordered, `top_k`. `filter`
-restricts the candidate set (e.g. account scoping). Ranking has a secondary sort on `id_column` so
-rows tied on score (common with near-duplicate chunks) are stable across runs and engines — pass an
-`id_column` to get that determinism at the `top_k` boundary.
+**`content_hash(text_expression)`**: SHA-256 (lowercase hex) of the exact string handed to
+`embed()`, after chunking and any `in_text` prepending. Must be a real upstream column.
 
-**`create_vector_index(name, relation, column, attributes=[], warehouse=none, target_lag='1 day', embedding_model=none, distance_type='COSINE', index_type='IVF', storing=[])`** — **opt-in,
-`dbt run-operation` ONLY** (never a model). Builds the engine's external, separately-billed index/
-service (Snowflake Cortex Search, BigQuery vector index; Databricks is API-created). Drop it
-explicitly when done.
+**`embedding_dimension(vector_expression)`**: the **observed** length of the returned vector,
+never the configured dimension.
 
-**`knowledge_base(sources)`** — unions many pre-embedded source relations into one common-shape
-mart (`source_type, source_id, account_key, text, embedding, ts, citation_url, classification`)
-with per-source lineage. `sources` is a list of dicts (`relation, source_type, source_id,
-account_key, text, embedding, timestamp`, plus optional `citation_url` and `classification`);
-register a source by adding one dict. `text` and `ts` are cast to a common type so sources with
-differing types (e.g. a `DATE` vs a `TIMESTAMP` timestamp column) union cleanly on strict engines
-like BigQuery; `embedding` is not cast — all sources must already share one embedding model (and
-thus type), which `version_guard` enforces. `citation_url` and `classification` are each
-independently optional per source and default to `NULL` when a source omits them.
+**`embedding_fn_fingerprint(model=none, dimension=none, extra=none)`**: compile-time hash of
+everything defining the `embed()` call besides input text. Pass as `incremental_delta_predicate`'s
+`version` with `version_column='embedding_fn_fingerprint'`.
 
-### Evaluation & groundedness
+**`embedding_logic_hash()`**: CI-verified content hash of `embed()`'s call-graph closure in this
+package's source. Audit column only, never gates reprocessing. See
+[ADR-0025](adr/0025-embedding-logic-hash-as-a-ci-verified-content-hash.md).
 
-**`grounded`** *(generic test)* — attach in `schema.yml` to an evidence column; fails a row whose
-quote isn't a substring of `source_text_column` (after optional case-fold / whitespace-collapse).
-Args: `source_text_column` (required), `ignore_case=true`, `normalize_whitespace=true`,
-`allow_empty=false`.
+#### Search
 
-**`conforms_to_schema(relation, column, schema_name, schema_version, property=none, allow_null=false)`** — a macro for a **singular test**: returns the rows whose `column` value isn't in the
-`schema` enum. Point it at a flattened scalar (use `field` first).
+**`vector_search(relation, embedding_column, query_embedding, top_k=10, id_column=none, select_columns=none, filter=none)`**: ranked cosine similarity over an embedding **column**
+(brute-force; no index). Returns `[id_column, select_columns..., score]` ordered, `top_k`. Secondary
+sort on `id_column` for tie stability.
 
-**`eval(relation, prediction_column, expected_column, prompt_version=none)`** — scores predictions
-vs. a golden column → `metric, label, value` rows (accuracy + per-label precision/recall). No AI.
-Threshold a metric with a test to gate a prompt/model change.
+**`knowledge_base(sources)`**: unions many pre-embedded source relations into one common-shape mart
+(`source_type, source_id, account_key, text, embedding, ts, citation_url, classification`) with
+per-source lineage. `sources` is a list of dicts; `citation_url` and `classification` are each
+independently optional per source.
+
+#### Trust
+
+**`grounded`** *(generic test)*: attach in `schema.yml` to an evidence column; fails a row whose
+quote isn't a substring of `source_text_column`. Args: `source_text_column` (required),
+`ignore_case=true`, `normalize_whitespace=true`, `allow_empty=false`.
+
+**`conforms_to_schema(relation, column, schema_name, schema_version, property=none, allow_null=false)`**: a macro for a **singular test**: returns rows whose `column` value isn't in the
+schema enum. Point it at a flattened scalar (use `field` first).
+
+### Preview (not fully vetted)
+
+**`generate(input_column, prompt, output_schema=none, model=none)`**: free-form generation; plain
+text, or a structured object if you pass `output_schema`.
+
+**`extract(input_column, prompt=none, output_schema=none, model=none)`**: typed extraction;
+`output_schema` **required**; returns a structured record with all its fields.
+
+**`text(ai_result)`**: plain text of an **unstructured** `generate`.
+
+**`field(ai_result, field, as_type=none)`**: one field out of a **structured** result (`generate`
+with a schema, or `extract`), cast to `as_type`. Flatten with this before `conforms_to_schema`.
+
+**`ai_agg(input_column, prompt, order_column=none, model=none)`**: group-level aggregation across a
+`GROUP BY` group. `prompt` is a plain instruction string, not a template. Cross-adapter behavior
+diverges; pair with `guard_agg_batch` on Databricks.
+
+**`guard_agg_batch(relation, input_column, group_by_column, filter=none)`**: grouped counterpart to
+`guard_batch` for `ai_agg`; sums estimated tokens per group and raises on `max_agg_group_tokens`.
+
+**`create_vector_index(name, relation, column, attributes=[], warehouse=none, target_lag='1 day', embedding_model=none, distance_type='COSINE', index_type='IVF', storing=[])`**: **opt-in,
+`dbt run-operation` ONLY**. Builds the engine's external, separately-billed index/service. Drop it
+explicitly.
+
+**`embedding_canary`** *(model, disabled by default)*: runtime drift monitor; re-embeds a fixed
+probe set and compares to a blessed baseline by cosine similarity.
 
 ### Internal helpers
 
-Part of the surface but rarely called directly — they isolate per-engine divergence or introspect
-schemas:
+Part of the surface but rarely called directly as they isolate per-engine divergence or introspect schemas:
 
 | Macro | Purpose |
-|---|---|
-| `array_agg(expr, order_expr)` / `string_agg(expr, sep, order_expr)` | dispatched ordered array / string aggregation (the one divergence inside `chunk`) |
-| `contains(haystack, needle)` | dispatched substring test (BigQuery `STRPOS` vs ANSI `POSITION … IN`) — backs `grounded` |
-| `collapse_ws(expr)` | dispatched trim + whitespace-collapse — backs `norm_text` |
+| --- | --- |
+| `array_agg(expr, order_expr)` / `string_agg(expr, sep, order_expr)` | dispatched ordered array / string aggregation (the divergence inside `chunk`) |
+| `contains(haystack, needle)` | dispatched substring test (BigQuery `STRPOS` vs ANSI `POSITION … IN`), backs `grounded` |
+| `collapse_ws(expr)` | dispatched trim + whitespace-collapse, backs `norm_text` |
 | `norm_text(expr, ignore_case=false, normalize_whitespace=false)` | composes `lower()` + `collapse_ws` for grounding |
 | `schema_enum(output_schema, property=none)` | the allowed-value list from a schema (backs conformance) |
 | `schema_categories(output_schema)` / `schema_label_field(output_schema)` | the enum values / the enum property name (used by `classify`) |
+| `augment_prompt(prompt, output_schema)` | prepends an "allowed values" block per enum field (BigQuery enum enforcement) |
 | `bq_output_schema(json_schema)` | JSON schema → BigQuery `name TYPE` list |
-| `bq_model_params(max_output_tokens, thinking_budget)` | BigQuery `model_params` JSON (output cap + thinking budget) |
-| `str_literal(s)` | a portable SQL string literal — **dispatched**: newlines as `chr(10)` everywhere, single quotes doubled everywhere, and backslashes doubled on Snowflake/Databricks/BigQuery (where `\` is an escape char) but left literal on duckdb/ANSI. Backs `render_prompt` and `classify`'s enum arrays so arbitrary prompt/label text can't break or corrupt the SQL |
-| `require_bq_model()` / `require_databricks_serverless()` | prerequisite checks (BigQuery advisory; Databricks runtime check deferred — currently a no-op) |
+| `bq_model_params(max_output_tokens, thinking_budget)` | BigQuery `model_params` JSON |
+| `str_literal(s)` | a portable, dispatched SQL string literal (newlines, quotes, backslashes handled per engine) |
+| `require_bq_model()` / `require_databricks_serverless()` | prerequisite checks (BigQuery advisory; Databricks deferred) |
+
+## The dispatch pattern
+
+Every engine-specific macro uses `adapter.dispatch` with per-adapter impls (`__snowflake`,
+`__databricks`, `__bigquery`), the dbt-utils convention. Users call one macro; the correct dialect
+fires. A dispatched macro `x` lives in `x.sql` (dispatch call only); real SQL in `x__snowflake.sql`,
+`x__databricks.sql`, `x__bigquery.sql`. `generate.sql` is the canonical reference; copy its shape.
 
 ## Configuration
 
-All divergent prerequisites are `vars` (see `dbt_project.yml`), visible and documented — never
-inferred. Key vars: `model_generate` / `model_classify` / `model_extract` and
-`embedding_model` (per-function model names — always explicit); `chunk_target_tokens` /
-`chunk_overlap_tokens`; `max_batch_rows` / `max_est_tokens` (guard ceilings);
-`max_output_tokens` and `bq_thinking_budget` (output-side cost control — the latter is
-BigQuery/Gemini-only, `0` disables billed "thinking"); `cost_per_1k_tokens` (for logged
-`est_cost`). BigQuery's `bq_connection` is **optional** (End-User Credentials cover interactive
-queries; the `AI.*` functions need no `CREATE MODEL`). `embedding_canary_similarity_threshold`
-(default `0.999`), `embedding_canary_test_severity` (default `warn`), and, Snowflake only,
-`embedding_canary_vector_dimension` (required, no default) configure the runtime drift monitor
-above; `monitoring: +enabled: true` in your own `dbt_project.yml` turns it on.
+All divergent prerequisites are `vars` (see `dbt_project.yml`), visible and documented, never
+inferred. Key vars: `model_generate` / `model_classify` / `model_extract` and `embedding_model`
+(per-function model names, always explicit); `chunk_target_tokens` / `chunk_overlap_tokens`;
+`max_batch_rows` / `max_est_tokens` (guard ceilings); `max_output_tokens` and `bq_thinking_budget`
+(output-side cost control; the latter BigQuery/Gemini-only, `0` disables billed "thinking");
+`cost_per_1k_tokens` (for logged `est_cost`). BigQuery's `bq_connection` is **optional** (End-User
+Credentials cover interactive queries; the `AI.*` functions need no `CREATE MODEL`). The preview
+`embedding_canary` adds `embedding_canary_similarity_threshold` (default `0.999`),
+`embedding_canary_test_severity` (default `warn`), and, Snowflake only,
+`embedding_canary_vector_dimension` (required, no default); `monitoring: +enabled: true` turns it on.
+
+## Repo map
+
+```
+macros/
+  functions/               # generate/classify/extract/embed (adapter.dispatch) + prereq checks
+  prompts/                 # prompt / schema_def (macro-library loader, ADR-0001) + render_prompt
+  chunking/                # chunk (unit packing) + split_sentences (layer-1 splitter) + array_agg/string_agg
+  metadata/                # attach_metadata (join source-level metadata onto chunks)
+  cost/                    # guard_batch / estimate_tokens / log_ai_run / complete_ai_run
+  audit/                   # ai_run_log_columns_sql / ensure_ai_run_log_exists
+  incremental/             # version_guard / incremental_delta_predicate / row_value_not_in
+  embedding/               # content_hash / embedding_dimension / embedding_fn_fingerprint / embedding_logic_hash
+  retrieval/               # vector_search
+  operations/              # create_vector_index (run-operation only)
+  evaluation/              # grounded / conforms_to_schema / eval (+ contains/collapse_ws/norm_text/schema_enum)
+models/audit/              # ai_run_log (append-only usage/cost log)
+prompts/                   # prompt+schema library, one Jinja macro per name+version (ADR-0001)
+seeds/                     # synthetic fixtures (no real customer data)
+integration_tests/         # per-adapter (cloud) projects + duckdb/ (credential-free deterministic tests)
+ci/                        # structure-only CI profiles (placeholder creds) + verify_embedding_logic_hash.py
+```

@@ -12,8 +12,7 @@ This package is the product of deliberate exploration. We mapped the full set of
 context engineering requires, then built them out to different depths. That map, and where each
 piece stands, is in [The capabilities context engineering requires](#the-capabilities-context-engineering-requires)
 below. The reasoning behind every major choice is recorded across 28 ADRs in
-[`adr/`](adr/README.md); engine parity is tracked in [`docs/PARITY.md`](docs/PARITY.md); the full
-rationale for each capability is in [`docs/CONTEXT_ENGINEERING.md`](docs/CONTEXT_ENGINEERING.md).
+[`adr/`](adr/README.md).
 
 ## Why this exists
 
@@ -21,11 +20,11 @@ For a decade we modeled data for one reader: the dashboard. AI added new readers
 
 Every major warehouse now exposes AI as SQL functions, but the surfaces diverge enough that teams rebuild the same primitives on each platform. This package normalizes the ~80% that maps cleanly across engines and makes the divergent ~20% explicit configuration: never inferred, always documented, and it fails clearly.
 
-## The primary path
+## The tested path
 
 The clearest way into the package is one pipeline. It is the shortest route from raw text to
 governed, retrievable context, it is validated end to end on all three engines, and it exercises
-most of the package's capabilities at least once:
+many of the package's capabilities at least once:
 
 ```
         raw text                chunks              labeled chunks           vectors            answers
@@ -36,7 +35,7 @@ most of the package's capabilities at least once:
                           lineage-preserving     per chunk              embeddings         retrieval
 ```
 
-**Chunk → classify → embed → search** is the backbone of retrieval-augmented context: it takes
+**Chunk → classify → embed → search** is one of the main patterns in retrieval-augmented context: it takes
 messy source text (call transcripts, support tickets, docs) and turns it into a searchable,
 labeled, lineage-preserving corpus an AI agent can read reliably. Each step is an ordinary dbt
 model. You write the pattern once and it runs on any of the three engines.
@@ -54,112 +53,57 @@ See the whole path running on a realistic multi-source corpus in the worked exam
 
 ## 1. Chunk
 
-`chunk` packs ordered, atomic text **units** (a turn for transcripts, a sentence for documents)
-into token-bounded chunks that never split a unit, never cross a partition key, and carry every
-unit's id into `source_rows` for lineage. Pure window SQL that is deterministic and involves zero AI cost. Defaults: `chunk_target_tokens = 512`, `chunk_overlap_tokens = 0` (opt-in overlap). See
-[ADR-0002](adr/0002-chunking-as-token-bounded-unit-packing.md) for the algorithm and research.
-
-**Why chunk at all?** Embedding models and LLMs have bounded context, and retrieval quality
-depends on chunks being coherent (one topic, not half of two). Naively cutting text every N
-characters splits sentences and destroys meaning. `chunk` packs whole units up to a token budget and stops, so a chunk is always made of complete turns or sentences, and always knows which source rows it came from.
+`chunk` packs ordered text units (a transcript turn, a document sentence) into token-bounded
+chunks that never split a unit or cross a partition key, carrying each unit's id into `source_rows`
+for lineage. Deterministic, zero AI cost. `split_sentences` turns a long document into one row per
+sentence to feed `chunk`, and `attach_metadata` joins source-level fields (title, citation link)
+onto chunks afterward.
 
 ```sql
--- Package macros are called qualified with the package name (dbt convention, like dbt_utils.*).
 {{ dbt_context_engineering.chunk(
-    relation         = ref('stg_gong__transcripts'),
-    id_column        = 'utterance_id',   -- lineage -> source_rows
-    order_column     = 'turn_index',
-    text_column      = 'utterance_text',
-    partition_column = 'call_id',        -- chunks never span a call
-    label_column     = 'speaker'         -- prefixes "speaker: text" in chunk_text
+    relation = ref('stg_gong__transcripts'), id_column = 'utterance_id',
+    order_column = 'turn_index', text_column = 'utterance_text',
+    partition_column = 'call_id', label_column = 'speaker'
 ) }}
 ```
 
-Output columns: `chunk_id, partition_key, chunk_seq, source_rows, chunk_text, n_source_rows, token_estimate`. Every chunk carries its source ids, as with all dbt work, lineage is non-negotiable.
-
-### Splitting long text first (`split_sentences`)
-
-`chunk` *packs* pre-split units; it does not *split* a blob. Transcripts already arrive as one
-row per turn, so they feed `chunk` directly. Documents that arrive as one big piece of text need a staging step first: `split_sentences` turns one text row into one row per sentence
-(`sentence_id, document_id, sentence_index, sentence_text`), which you then feed to `chunk`
-(unit = sentence). Deterministic, zero AI. The boundary rule is naive (`. ! ?`) and identical on
-every engine, so a corpus splits the same everywhere; for prose that needs better boundaries,
-split with a real tokenizer upstream.
-
-```sql
--- documents -> sentences -> token-bounded chunks
-{{ dbt_context_engineering.split_sentences(
-    relation    = ref('stg__documents'),
-    id_column   = 'document_id',
-    text_column = 'document_text'
-) }}
-```
-
-### Carrying metadata onto chunks (`attach_metadata`)
-
-`chunk` and `split_sentences` know nothing about metadata, on purpose. Carrying a source-level
-field (title, a citation link, call participants) onto every chunk is a `distinct` collapse and a join, plain SQL with no per-engine divergence, so it lives in a separate, portable macro that composes with their unmodified output.
-
-```sql
--- attach title/citation_url from the ORIGINAL document-level table, joined on document_id
-{{ dbt_context_engineering.attach_metadata(
-    chunks_relation      = ref('stg_docs_chunks'),   -- the chunk output
-    metadata_relation    = ref('stg__documents'),    -- the document-level table, pre-split
-    metadata_key_column  = 'document_id',
-    metadata_columns     = ['title', 'citation_url'],
-    in_text              = false                      -- default: columns only, not embedded
-) }}
-```
-
-Each `metadata_columns` value must be constant per key (source-level, not unit-level); the macro
-collapses `metadata_relation` with `distinct`, so a key carrying conflicting values fails the
-`chunk_id` uniqueness test rather than silently keeping one. Pass `in_text=True` to also prepend
-a `"col: value"` block to `chunk_text` so the embedding or LLM sees it (`token_estimate` is
-recomputed to match). See [ADR-0013](adr/0013-attach-metadata-as-a-separate-macro.md).
+See [ADR-0002](adr/0002-chunking-as-token-bounded-unit-packing.md),
+[ADR-0013](adr/0013-attach-metadata-as-a-separate-macro.md), and the worked example for splitting,
+metadata, and overlap options.
 
 ---
 
 ## 2. Classify
 
-`classify` puts a **typed AI label** on each chunk, a single value from a closed set (signal type, sentiment, topic, risk category). This is what makes the corpus filterable later: "everything classified `at_risk`," "only `pricing` chunks."
-
-**Prompts and schemas are code.** The label set isn't a magic string buried in SQL, it's a versioned prompt/schema pair under `prompts/`, resolved to a compile-time literal. Prompts are
-diffable, PR-reviewed, and explicitly versioned (no implicit "latest"). See
-[ADR-0001](adr/0001-prompts-and-schemas-as-versioned-macros.md).
-
-**No AI call ships unguarded.** Every AI operation pairs with `guard_batch` (a pre-hook circuit
-breaker that stops a run before it spends past a configured ceiling) and `log_ai_run` (which
-appends row count, tokens, and estimated cost to the `ai_run_log`). Cost is a first-class output,
-not an afterthought. See [ADR-0003](adr/0003-cost-as-a-first-class-output.md).
+`classify` puts a typed label from a closed set (signal, sentiment, risk) on each chunk, which is
+what makes the corpus filterable later. Its prompt and output schema are versioned code
+(`prompt` / `schema_def`), and every AI call is guarded and logged: `guard_batch` stops a run
+before it overspends, `log_ai_run` records the cost. It returns a scalar string on all three
+engines.
 
 ```sql
-{{ config(
-  pre_hook  = "{{ dbt_context_engineering.guard_batch(ref('stg_chunks'), 'chunk_text') }}",
-  post_hook = [
-    "{{ dbt_context_engineering.log_ai_run('classify', model_name=var('model_classify'), relation=ref('stg_chunks'), input_column='chunk_text') }}",
-    "{{ dbt_context_engineering.complete_ai_run('classify', model_name=var('model_classify')) }}"
-  ]
-) }}
 select
     chunk_id,
-    {{ dbt_context_engineering.classify(
-        input_column  = 'chunk_text',
-        prompt        = dbt_context_engineering.prompt('EXAMPLE_signal_classify', 'v3'),
-        output_schema = dbt_context_engineering.schema_def('EXAMPLE_signal_classify', 'v3')
-    ) }} as signal
+    {{ dbt_context_engineering.classify('chunk_text',
+        dbt_context_engineering.prompt('EXAMPLE_signal_classify', 'v3'),
+        dbt_context_engineering.schema_def('EXAMPLE_signal_classify', 'v3')) }} as signal
 from {{ ref('stg_chunks') }}
 ```
 
-`classify` returns the chosen label as a **scalar string** on all three engines. The divergent return shapes (Snowflake VARIANT, Databricks JSON, BigQuery STRUCT) are normalized behind the wrapper, so downstream models never branch on the engine. The schema's `enum` is the taxonomy;
-`conforms_to_schema` (see [Trust](#trust-making-the-context-testable)) can later assert the column
-only ever holds values from that enum, catching an invented label.
+See [ADR-0001](adr/0001-prompts-and-schemas-as-versioned-macros.md) (prompts as code) and
+[ADR-0003](adr/0003-cost-as-a-first-class-output.md) (cost), and the worked example for the
+guard/log hooks.
 
 ---
 
 ## 3. Embed
 
-`embed` turns each chunk into a vector so it can be searched by meaning rather than keyword. The
-model is pinned via the `embedding_model` var. A corpus embedded by one model can't be searched by another, so the model identity is explicit and enforced.
+`embed` turns each chunk into a vector, searchable by meaning. The model is pinned via
+`embedding_model` (a corpus embedded by one model can't be searched by another). `embed()` alone
+works to get started; for production, a governed incremental pattern re-embeds only what changed
+(`content_hash`), re-embeds the whole corpus on a model bump (`version_guard` /
+`embedding_fn_fingerprint`), and keeps the guard, log, and model body reading one delta
+(`incremental_delta_predicate`).
 
 ```sql
 select
@@ -168,120 +112,42 @@ select
 from {{ ref('stg_chunks_classified') }}
 ```
 
-**Embeddings are expensive to recompute, so this is where the package earns its keep as a
-production pattern.** A trustworthy embedding table only re-embeds what actually changed, catches
-a chunk whose source text changed even when the model didn't, re-embeds the whole corpus on a
-model bump, guards cost, logs every run, and stamps enough metadata to tell whether a stored
-vector still matches what would be produced today. The package ships a governed incremental
-pattern that does all of this with no custom materialization:
-
-- **`content_hash`**: hash the exact string handed to `embed()` so a changed chunk is detected
-  even when its key already exists.
-- **`version_guard`** / **`embedding_fn_fingerprint`**: a model/dimension/provider-parameter bump
-  re-embeds the whole corpus; a `unique_key` merge replaces the old rows.
-- **`incremental_delta_predicate`**: one source of truth so the model body's `where`, the
-  guard's `filter`, and the log's `filter` all describe the same batch and can't drift.
-
-```sql
--- models/chunk_embeddings.sql  (abridged; see the full worked example in ADR-0023)
-{{ config(
-    materialized = 'incremental',
-    unique_key   = 'chunk_id',
-    pre_hook     = [
-      "{{ dbt_context_engineering.guard_batch(ref('stg_chunks_hashed'), 'chunk_text',
-          filter=dbt_context_engineering.incremental_delta_predicate('chunk_id',
-              dbt_context_engineering.embedding_fn_fingerprint(model=var('embedding_model')),
-              'embedding_fn_fingerprint', content_hash_column='content_hash')) }}",
-      "{{ dbt_context_engineering.log_ai_run('embed', model_name=var('embedding_model'),
-          relation=ref('stg_chunks_hashed'), input_column='chunk_text',
-          filter=dbt_context_engineering.incremental_delta_predicate('chunk_id',
-              dbt_context_engineering.embedding_fn_fingerprint(model=var('embedding_model')),
-              'embedding_fn_fingerprint', content_hash_column='content_hash')) }}"
-    ],
-    post_hook    = "{{ dbt_context_engineering.complete_ai_run('embed', model_name=var('embedding_model')) }}"
-) }}
-{% set fingerprint = dbt_context_engineering.embedding_fn_fingerprint(model=var('embedding_model')) %}
-{% set delta = dbt_context_engineering.incremental_delta_predicate('chunk_id', fingerprint,
-    'embedding_fn_fingerprint', content_hash_column='content_hash') %}
-select
-    chunk_id,
-    content_hash,
-    {{ dbt_context_engineering.embed('chunk_text') }} as embedding,
-    '{{ fingerprint }}'                               as embedding_fn_fingerprint,
-    '{{ run_started_at }}'                            as embedded_at
-from {{ ref('stg_chunks_hashed') }}
-{% if delta %}where {{ delta }}{% endif %}
-```
-
-The full mechanism, why `content_hash` needs a real upstream column, the pre-/post-hook rules for
-`log_ai_run`, why the delta uses a dispatched row-value `NOT IN` instead of a correlated subquery, and the null-text handling, is documented in [ADR-0004](adr/0004-version-aware-incremental-refresh.md) and [ADR-0023](adr/0023-embedding-metadata-and-content-hash-delta.md) so this README stays readable.
-If you're just getting started, `embed()` on its own (no incremental config) works fine; adopt the
-governed pattern when recompute cost starts to matter.
+See [ADR-0004](adr/0004-version-aware-incremental-refresh.md) and
+[ADR-0023](adr/0023-embedding-metadata-and-content-hash-delta.md), and the worked example, for the
+full governed incremental model.
 
 ---
 
 ## 4. Search
 
-`vector_search` ranks the embedded corpus by cosine similarity to a query vector, brute-force over the embedding **column** by default (no index needed), which is the portable, governed
-baseline. This is the retrieval step an agent calls to pull the most relevant passages, now
-filterable by the classification label from step 2 and carrying the lineage from step 1.
+`vector_search` ranks the corpus by cosine similarity to a query vector, brute-force over the
+embedding column by default (no index), filterable by the label from step 2 and carrying the
+lineage from step 1. `knowledge_base` unions many pre-embedded sources into one common shape so a
+single search answers across systems at once.
 
 ```sql
 {{ dbt_context_engineering.vector_search(
-    relation         = ref('chunk_embeddings'),
-    embedding_column = 'embedding',
-    query_embedding  = dbt_context_engineering.embed('renewal risk'),  -- or an array literal
-    top_k            = 10,
-    id_column        = 'chunk_id',
-    select_columns   = ['signal', 'citation_url'],
-    filter           = "signal = 'at_risk'"
+    relation = ref('chunk_embeddings'), embedding_column = 'embedding',
+    query_embedding = dbt_context_engineering.embed('renewal risk'),
+    top_k = 10, id_column = 'chunk_id',
+    select_columns = ['signal', 'citation_url'], filter = "signal = 'at_risk'"
 ) }}
 ```
 
-Ranking has a secondary sort on `id_column`, so rows tied on score (common with near-duplicate
-chunks) are stable across runs and engines. See
-[ADR-0005](adr/0005-retrieval-brute-force-default-index-opt-in.md).
-
-### Searching across many sources at once (`knowledge_base`)
-
-Real questions span systems: "everything about account X" means tickets *and* calls *and* notes.
-`knowledge_base` unions multiple pre-embedded sources into one mart with a common shape
-(`source_type, source_id, account_key, text, embedding, ts, citation_url, classification`), so a
-single `vector_search` answers across all of them with per-source lineage, a resolvable citation
-link, and the `classify()` label carried into results. Register a source by adding one dict:
-
-```sql
--- models/knowledge_base.sql
-{{ dbt_context_engineering.knowledge_base([
-    {'relation': ref('stg_tickets'), 'source_type': 'ticket',
-     'source_id': 'ticket_id', 'account_key': 'account_id',
-     'text': 'body', 'embedding': 'embedding', 'timestamp': 'created_at',
-     'citation_url': 'ticket_url', 'classification': 'category'},
-    {'relation': ref('stg_calls'), 'source_type': 'call',
-     'source_id': 'call_id', 'account_key': 'account_id',
-     'text': 'transcript', 'embedding': 'embedding', 'timestamp': 'call_time',
-     'citation_url': 'call_url'}
-]) }}
-```
-
-All sources must share one embedding model (`version_guard` enforces it). See
-[ADR-0006](adr/0006-knowledge-base-union-to-common-shape.md) and
-[ADR-0027](adr/0027-classification-as-a-second-privileged-knowledge-base-column.md).
+See [ADR-0005](adr/0005-retrieval-brute-force-default-index-opt-in.md) (retrieval) and
+[ADR-0006](adr/0006-knowledge-base-union-to-common-shape.md) (knowledge base), and the worked
+example.
 
 ---
 
 ## Trust: making the context testable
 
-Context is only useful if it's *trustworthy*. Three deterministic tests make AI outputs testable like any other dbt object, no warehouse, no AI spend, and round out the primary path. See [ADR-0007](adr/0007-context-evaluation-and-groundedness.md).
-
-- **`grounded`** *(generic test)*: asserts each row's evidence/quote actually appears in its
-  source text, so a hallucinated quote fails the build.
-- **`conforms_to_schema`** *(singular-test macro)*: asserts a classify/extract column only holds
-  values from the enum its schema declares, catching an invented label. The allowed set is
-  resolved from the same schema macro the wrapper used, so it can't drift into a hand-copied list.
+Three deterministic tests make AI output testable like any other dbt object, with no warehouse and
+no AI spend: `grounded` fails a row whose evidence quote isn't in its source text,
+`conforms_to_schema` fails a label outside its schema's enum, and `eval` scores predictions
+against a golden set. See [ADR-0007](adr/0007-context-evaluation-and-groundedness.md).
 
 ```yaml
-# schema.yml: grounding a classify/extract evidence column
 columns:
   - name: evidence
     tests:

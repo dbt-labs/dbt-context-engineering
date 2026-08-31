@@ -8,15 +8,24 @@ It is **not** an agent, an MCP server, or a serving layer. It produces the gover
 those systems read. Everything ships as ordinary dbt models, macros, seeds, and tests, reviewed
 in PRs, enforced by tests, and traceable in the DAG.
 
+This package is the product of deliberate exploration. We mapped the full set of capabilities
+context engineering requires, then built them out to different depths. That map, and where each
+piece stands, is in [The capabilities context engineering requires](#the-capabilities-context-engineering-requires)
+below. The reasoning behind every major choice is recorded across 28 ADRs in
+[`adr/`](adr/README.md); engine parity is tracked in [`docs/PARITY.md`](docs/PARITY.md); the full
+rationale for each capability is in [`docs/CONTEXT_ENGINEERING.md`](docs/CONTEXT_ENGINEERING.md).
+
 ## Why this exists
 
 For a decade we modeled data for one reader: the dashboard. AI added new readers like copilots, agents, and the warehouse's own AI SQL functions, that ask questions a dashboard never could. Answering them reliably is a modeling problem, and dbt already has the discipline for it: staging models, tests, docs, one governed DAG. Context engineering is that discipline pointed at a new reader.
 
 Every major warehouse now exposes AI as SQL functions, but the surfaces diverge enough that teams rebuild the same primitives on each platform. This package normalizes the ~80% that maps cleanly across engines and makes the divergent ~20% explicit configuration: never inferred, always documented, and it fails clearly.
 
-## The pattern this package is built around
+## The primary path
 
-The heart of the package, and the part we're focused on, have exercised end to end, and recommend building on today is one pipeline:
+The clearest way into the package is one pipeline. It is the shortest route from raw text to
+governed, retrievable context, it is validated end to end on all three engines, and it exercises
+most of the package's capabilities at least once:
 
 ```
         raw text                chunks              labeled chunks           vectors            answers
@@ -34,19 +43,12 @@ model. You write the pattern once and it runs on any of the three engines.
 
 The steps compose but are independently useful. You can chunk without embedding and classify without searching. Together they're the path from "we have a pile of unstructured text" to "an agent can retrieve the three most relevant, labeled, citable passages about account X."
 
-Everything else in the package (see [Beyond the core pattern](#beyond-the-core-pattern-not-fully-vetted)) supports or extends this spine but is **not yet fully vetted, so** treat it as a preview and jumping off point for further exploration.
+The primary path is the on-ramp, not the whole package. The full set of capabilities context
+engineering requires, and how far each is built out, follows the path sections below in
+[The capabilities context engineering requires](#the-capabilities-context-engineering-requires).
 
-### See it in action: jaffle-logistics
-
-[`jaffle-logistics`](https://github.com/dbt-labs/jaffle-logistics) is the canonical worked
-example of this package in use. It models a fictional logistics company whose data is scattered
-across roughly eight disconnected systems (CRM, support tickets, dispatch notes, incident
-reports, legal contracts, Slack, call transcripts), and shows where exact-match SQL (joins, regex)
-runs out of road, then runs exactly this chunk → classify → embed → search pipeline to fold that
-free text into one governed, searchable knowledge base, all without leaving dbt. It builds on
-DuckDB (local, free), Snowflake, BigQuery, and Databricks, and the full story with real query
-output lives in its docs. Start there to see the package end to end on a realistic multi-source
-corpus.
+See the whole path running on a realistic multi-source corpus in the worked example,
+[`jaffle-logistics`](https://github.com/dbt-labs/jaffle-logistics).
 
 ---
 
@@ -265,15 +267,12 @@ link, and the `classify()` label carried into results. Register a source by addi
 All sources must share one embedding model (`version_guard` enforces it). See
 [ADR-0006](adr/0006-knowledge-base-union-to-common-shape.md) and
 [ADR-0027](adr/0027-classification-as-a-second-privileged-knowledge-base-column.md).
-[`jaffle-logistics`](https://github.com/dbt-labs/jaffle-logistics) builds exactly this: one
-`knowledge_base` unioning five independent source chains (legal docs, incident reports, CRM notes,
-call transcripts, support tickets) into a single searchable mart.
 
 ---
 
 ## Trust: making the context testable
 
-Context is only useful if it's *trustworthy*. Three deterministic tests make AI outputs testable like any other dbt object, no warehouse, no AI spend, and round out the core pattern. See [ADR-0007](adr/0007-context-evaluation-and-groundedness.md).
+Context is only useful if it's *trustworthy*. Three deterministic tests make AI outputs testable like any other dbt object, no warehouse, no AI spend, and round out the primary path. See [ADR-0007](adr/0007-context-evaluation-and-groundedness.md).
 
 - **`grounded`** *(generic test)*: asserts each row's evidence/quote actually appears in its
   source text, so a hallucinated quote fails the build.
@@ -292,22 +291,53 @@ columns:
 
 ---
 
-## This is a seed
+## The capabilities context engineering requires
 
-This package is the **seed of a larger open-source effort**, not a finished product. The chunk → classify → embed → search spine is the part we're confident in and are focusing on first. Around it there's a wider surface including group-level aggregation, managed vector indexes, runtime drift monitoring, and more AI operations, that is built but **not yet fully vetted**.
+The primary path above is deliberately the simple route through. Behind it we mapped the full
+set of capabilities we believe context engineering requires, and built each one out. Some are
+validated end to end across all three engines; others are implemented but awaiting live
+validation; others are a known requirement we are actively developing and treat as beta. The map
+is one thing, laid out with honest maturity. The rationale for each is in
+[`docs/CONTEXT_ENGINEERING.md`](docs/CONTEXT_ENGINEERING.md).
 
-We're publishing the vetted core now, in the open, so it can grow the way dbt itself did:
-through close collaboration with the **dbt community**. The intent is that practitioners on Snowflake, Databricks, and BigQuery use it on real corpora, tell us where it breaks, contribute the patterns they've had to rebuild by hand, and help decide what graduates from preview into the supported core. Issues, PRs, and pattern proposals are all welcome. This toolkit gets more useful the more the community shapes it. [`jaffle-logistics`](https://github.com/dbt-labs/jaffle-logistics) is the reference project we grow alongside the package, the place we prove new patterns on a realistic multi-source corpus before they graduate.
+**Maturity levels**
 
----
+- **Validated**: built, deterministically tested where applicable, and executed on Snowflake,
+  Databricks, and BigQuery (plus duckdb for the deterministic pieces) against sample data.
+- **Built**: implemented and structurally verified; live validation at production scale or against
+  engine usage/cost tables is deferred (`LIVE-VALIDATION DEFERRED`).
+- **Beta**: a required capability we are aware of and actively working on. It ships in the package
+  but is not yet fully vetted (larger surface area, more per-engine divergence, or narrower
+  validation), so treat it as beta.
 
-## Beyond the core pattern (not fully vetted)
+| Capability | Delivered by | Maturity |
+|---|---|---|
+| Coherent, bounded chunking | `chunk`, `split_sentences` | **Validated** |
+| Source-level metadata & citations | `attach_metadata` (+ `source_rows` lineage) | **Validated** |
+| Prompts & schemas as versioned code | `prompt`, `schema_def`, `render_prompt` | **Validated** |
+| Typed classification | `classify` | **Validated** |
+| Semantic embedding | `embed` | **Validated** |
+| Reproducible / versioned refresh | `version_guard`, `content_hash`, `embedding_fn_fingerprint`, `incremental_delta_predicate` | **Validated** |
+| Governed retrieval | `vector_search` | **Validated** |
+| Cross-source knowledge base | `knowledge_base` | **Validated** |
+| Groundedness & evaluation | `grounded`, `conforms_to_schema`, `eval` | **Validated** |
+| Cost governance & audit | `guard_batch`, `log_ai_run`, `complete_ai_run` | **Built** (live cost reconciliation deferred) |
+| Free-form generation | `generate` | **Beta** |
+| Typed extraction | `extract` | **Beta** |
+| Group-level reasoning | `ai_agg`, `guard_agg_batch` | **Beta** |
+| Managed / scaled vector index | `create_vector_index` | **Beta** |
+| Runtime drift monitoring | `embedding_canary` | **Beta** |
 
-These pieces are built and exercised on all three engines, but they're **in beta,** larger surface area, more per-engine divergence, or narrower validation. Use them, but expect the edges to move as the community weighs in. They are not part of the focused chunk → classify → embed → search story above.
+### Capabilities in beta
+
+These are not extras or afterthoughts. They are capabilities we know context engineering needs,
+which is why they already ship in the package. They are not yet fully vetted (larger surface area,
+more per-engine divergence, or narrower validation than the primary path), so treat them as beta:
+use them, and expect the edges to move as we and the community harden them.
 
 - **`generate`** / **`extract`**: the other two row-level AI operations. `generate` is free-form
   generation (plain text or a structured object); `extract` pulls a typed record of fields present
-  in the text. `classify` (in the core pattern) covers the closed-set-label case; reach for these
+  in the text. `classify` (on the primary path) covers the closed-set-label case; reach for these
   when you need free text or a multi-field typed extraction. See
   [ADR-0010](adr/0010-four-ai-operations.md). Read structured results back portably with
   `text()` / `field()` ([ADR-0008](adr/0008-normalizing-ai-output.md)).
@@ -324,6 +354,23 @@ These pieces are built and exercised on all three engines, but they're **in beta
   pinned model's behavior. **Disabled by default** (`monitoring: +enabled: false`); it makes real
   `embed()` calls, so add it only to a scheduled production job. See
   [ADR-0026](adr/0026-embedding-canary-runtime-drift-monitor.md).
+
+---
+
+## Direction and contributing
+
+We built this in the open and intend to keep developing it that way, in close collaboration with
+the **dbt community**. The primary path is validated across the three warehouses; the beta
+capabilities above are a known part of the discipline that we are actively hardening. The intent
+is that practitioners on Snowflake, Databricks, and BigQuery run it on real corpora, tell us where
+it breaks, contribute the patterns they have had to rebuild by hand, and help decide what
+graduates from beta into the validated core.
+
+[`jaffle-logistics`](https://github.com/dbt-labs/jaffle-logistics) is the reference project we
+develop alongside the package: a fictional logistics company whose data is scattered across
+roughly eight disconnected systems, run through the primary path into one governed, searchable
+knowledge base. It is where we prove patterns on a realistic multi-source corpus. Issues, PRs, and
+pattern proposals are all welcome.
 
 ---
 
@@ -349,7 +396,7 @@ real production data at scale, and cost reconciliation against engine usage tabl
 Every public object. All are called **package-qualified** (`dbt_context_engineering.<name>(...)`),
 like `dbt_utils.*`. Args shown with `=` have defaults.
 
-### Core pattern
+### Primary path (validated)
 
 #### Chunking
 
@@ -455,7 +502,7 @@ quote isn't a substring of `source_text_column`. Args: `source_text_column` (req
 **`conforms_to_schema(relation, column, schema_name, schema_version, property=none, allow_null=false)`**: a macro for a **singular test**: returns rows whose `column` value isn't in the
 schema enum. Point it at a flattened scalar (use `field` first).
 
-### Preview (not fully vetted)
+### Beta (required capabilities, in progress)
 
 **`generate(input_column, prompt, output_schema=none, model=none)`**: free-form generation; plain
 text, or a structured object if you pass `output_schema`.
@@ -515,7 +562,7 @@ inferred. Key vars: `model_generate` / `model_classify` / `model_extract` and `e
 `max_batch_rows` / `max_est_tokens` (guard ceilings); `max_output_tokens` and `bq_thinking_budget`
 (output-side cost control; the latter BigQuery/Gemini-only, `0` disables billed "thinking");
 `cost_per_1k_tokens` (for logged `est_cost`). BigQuery's `bq_connection` is **optional** (End-User
-Credentials cover interactive queries; the `AI.*` functions need no `CREATE MODEL`). The preview
+Credentials cover interactive queries; the `AI.*` functions need no `CREATE MODEL`). The beta
 `embedding_canary` adds `embedding_canary_similarity_threshold` (default `0.999`),
 `embedding_canary_test_severity` (default `warn`), and, Snowflake only,
 `embedding_canary_vector_dimension` (required, no default); `monitoring: +enabled: true` turns it on.

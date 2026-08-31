@@ -163,8 +163,7 @@ The primary path above is deliberately the simple route through. Behind it we ma
 set of capabilities we believe context engineering requires, and built each one out. Some are
 validated end to end across all three engines; others are implemented but awaiting live
 validation; others are a known requirement we are actively developing and treat as beta. The map
-is one thing, laid out with honest maturity. The rationale for each is in
-[`docs/CONTEXT_ENGINEERING.md`](docs/CONTEXT_ENGINEERING.md).
+is one thing, laid out with their associated maturity.
 
 **Maturity levels**
 

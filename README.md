@@ -2,7 +2,11 @@
 
 A cross-platform dbt package that gives practitioners a reliable, portable toolkit for **context engineering** (modeling the data that AI agents read) across **Snowflake (Cortex), Databricks, and BigQuery**.
 
-Analytics engineers became the provider of trusted metrics for their organization. Context is the next thing they can own. This package produces it: the governed, tested, lineage-backed text and vectors that AI systems actually read. It is **not** an agent, an MCP server, or a serving layer; it makes the context those systems consume. Everything ships as ordinary dbt models, macros, seeds, and tests, reviewed in PRs, enforced by tests, and traceable in the DAG.
+Analytics engineers became the provider of trusted metrics for their organization. This allowed them to define how their business measures success, and keep people accountable and aligned so that progress could be made.
+
+Context for AI is the next frontier they can own. This package introduces new patterns to the broader analytics engineering ecosystem so that analytics engineers can level up and own context, producing governed, tested, lineage-backed text transformations such as vectors and AI inference as transformation techniques. This modeled context is better than raw data, because it encodes logic, meaning, and other improvements while making context simpler, cheaper and easier to retrieve for agents. We define the context engineering patterns in the same way that teams did to produce metrics, building a single source of truth for their organizations. The result is trusted context that can power AI work at scale, with the modularity, governance and capabilities that organizations have come to rely on their data teams for.
+
+It is **not** an agent, an MCP server, or a serving layer; it makes the context those systems consume. Everything ships as ordinary dbt models, macros, seeds, and tests, reviewed in PRs, enforced by tests, and traceable in the DAG.
 
 This package is dbt Labs' investment in helping our community level up for AI: a new frontier to push data work toward, and the first design pattern for getting there. We have mapped the capabilities we believe context engineering requires and started building them out. Some are validated end to end on all three engines; others ship as beta while we harden them. That map, and where each piece stands, is in [The capabilities context engineering requires](#the-capabilities-context-engineering-requires) below; the reasoning behind every major choice is recorded in the ADRs in [`adr/`](adr/README.md).
 

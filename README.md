@@ -83,11 +83,13 @@ See the whole path running on a realistic multi-source corpus in the worked exam
 
 ## 1. Chunk
 
+Retrieval quality is decided here, before any AI runs. A chunk that splits a sentence in half, or
+that merges two customers' calls, is not something a better model downstream can rescue.
+
 `chunk` packs ordered text units (a transcript turn, a document sentence) into token-bounded
-chunks that never split a unit or cross a partition key, carrying each unit's id into `source_rows`
-for lineage. Deterministic, zero AI cost. `split_sentences` turns a long document into one row per
-sentence to feed `chunk`, and `attach_metadata` joins source-level fields (title, citation link)
-onto chunks afterward.
+chunks that never split a unit and never cross a partition key, carrying each unit's id into
+`source_rows` for lineage. Deterministic, zero AI cost. `split_sentences` feeds it one row per
+sentence; `attach_metadata` joins source-level fields (title, citation link) on afterward.
 
 ```sql
 {{ dbt_context_engineering.chunk(
@@ -105,11 +107,14 @@ metadata, and overlap options.
 
 ## 2. Classify
 
-`classify` puts a typed label from a closed set (signal, sentiment, risk) on each chunk, which is
-what makes the corpus filterable later. Its prompt and output schema are versioned code
-(`prompt` / `schema_def`), and every AI call is guarded and logged: `guard_batch` stops a run
-before it overspends, `log_ai_run` records the cost. It returns a scalar string on all three
-engines.
+An unlabeled corpus can only be searched. A labeled one can be filtered, audited, and reasoned
+about — and a label is only as trustworthy as the prompt that produced it, which is why prompts
+here are versioned code rather than a string someone edited last quarter.
+
+`classify` puts a typed label from a closed set (signal, sentiment, risk) on each chunk. Its
+prompt and output schema are versioned macros (`prompt` / `schema_def`), so changing a taxonomy is
+a reviewable diff. Every AI call is guarded and logged: `guard_batch` stops a run before it
+overspends, `log_ai_run` records the cost.
 
 ```sql
 select
@@ -128,12 +133,16 @@ guard/log hooks.
 
 ## 3. Embed
 
-`embed` turns each chunk into a vector, searchable by meaning. The model is pinned via
-`embedding_model` (a corpus embedded by one model can't be searched by another). `embed()` alone
-works to get started; for production, a governed incremental pattern re-embeds only what changed
+An embedding is a derived asset, and it goes stale the moment its source text or its model
+changes. Treating that as an incremental modeling problem is most of what separates a governed
+corpus from a pile of vectors nobody can vouch for.
+
+`embed` turns each chunk into a vector, searchable by meaning, with the model pinned via
+`embedding_model` (a corpus embedded by one model cannot be searched by another). `embed()` alone
+works to get started. For production, the governed pattern re-embeds only what changed
 (`content_hash`), re-embeds the whole corpus on a model bump (`version_guard` /
-`embedding_fn_fingerprint`), and keeps the guard, log, and model body reading one delta
-(`incremental_delta_predicate`).
+`embedding_fn_fingerprint`), and keeps the guard, the log, and the model body all reading one
+delta (`incremental_delta_predicate`).
 
 ```sql
 select
@@ -150,10 +159,14 @@ full governed incremental model.
 
 ## 4. Search
 
-`vector_search` ranks the corpus by cosine similarity to a query vector, brute-force over the
-embedding column by default (no index), filterable by the label from step 2 and carrying the
-lineage from step 1. `knowledge_base` unions many pre-embedded sources into one common shape so a
-single search answers across systems at once.
+Retrieval is the contract with the agent. A passage is not useful because it is similar; it is
+useful because it is similar, filterable, and traceable back to the row it came from — which is
+what lets an agent cite a source instead of merely paraphrasing one.
+
+`vector_search` ranks the corpus by cosine similarity to a query vector: brute-force over the
+embedding column by default, no index to manage, filterable by the label from step 2 and carrying
+the lineage from step 1. `knowledge_base` unions many pre-embedded sources into one common shape,
+so a single search answers across systems at once.
 
 ```sql
 {{ dbt_context_engineering.vector_search(
@@ -170,12 +183,16 @@ example.
 
 ---
 
-## Trust: making the context testable
+## Trust: making context testable
+
+Trusted metrics earned their trust from tests. Context has to earn it the same way — and asking a
+model to grade another model's output is not a test, it is a second opinion billed by the token.
 
 Three deterministic tests make AI output testable like any other dbt object, with no warehouse and
 no AI spend: `grounded` fails a row whose evidence quote isn't in its source text,
 `conforms_to_schema` fails a label outside its schema's enum, and `eval` scores predictions
-against a golden set. See [ADR-0007](adr/0007-context-evaluation-and-groundedness.md).
+against a golden set. They run in CI, on every PR, like any other dbt test. See
+[ADR-0007](adr/0007-context-evaluation-and-groundedness.md).
 
 ```yaml
 columns:

@@ -144,23 +144,24 @@ Semantic search is deliberately the simple route through. Behind it we mapped th
 - **Built**: implemented and structurally verified; live validation at production scale or against engine usage/cost tables is deferred (`LIVE-VALIDATION DEFERRED`).
 - **Beta**: a required capability we are aware of and actively working on. It ships in the package but is not yet fully vetted (larger surface area, more per-engine divergence, or narrower validation), so treat it as beta.
 
-| Capability | Delivered by | Maturity |
-|---|---|---|
-| Coherent, bounded chunking | `chunk`, `split_sentences` | **Validated** |
-| Source-level metadata & citations | `attach_metadata` (+ `source_rows` lineage) | **Validated** |
-| Prompts & schemas as versioned code | `prompt`, `schema_def`, `render_prompt` | **Validated** |
-| Typed classification | `classify` | **Validated** |
-| Semantic embedding | `embed` | **Validated** |
-| Reproducible / versioned refresh | `version_guard`, `content_hash`, `embedding_fn_fingerprint`, `incremental_delta_predicate` | **Validated** |
-| Governed retrieval | `vector_search` | **Validated** |
-| Cross-source knowledge base | `knowledge_base` | **Validated** |
-| Groundedness & evaluation | `grounded`, `conforms_to_schema`, `eval` | **Validated** |
-| Cost governance & audit | `guard_batch`, `log_ai_run`, `complete_ai_run` | **Built** (live cost reconciliation deferred) |
-| Free-form generation | `generate` | **Beta** |
-| Typed extraction | `extract` | **Beta** |
-| Group-level reasoning | `ai_agg`, `guard_agg_batch` | **Beta** |
-| Managed / scaled vector index | `create_vector_index` | **Beta** |
-| Runtime drift monitoring | `embedding_canary` | **Beta** |
+| Capability | What it does | Delivered by | Maturity |
+|---|---|---|---|
+| Coherent, bounded chunking | Packs whole sentences or speaker turns into token-sized chunks, so meaning is never split | `chunk`, `split_sentences` | **Validated** |
+| Source-level metadata & citations | Carries title, link, and source ids onto every chunk, so a hit can cite its origin | `attach_metadata` (+ `source_rows` lineage) | **Validated** |
+| Prompts & schemas as versioned code | Pins prompts and schemas as immutable named versions, so an output change is a diff | `prompt`, `schema_def`, `render_prompt` | **Validated** |
+| Typed classification | Assigns each row exactly one label from a fixed, schema-defined taxonomy | `classify` | **Validated** |
+| Semantic embedding | Turns text into vectors, so texts with similar meaning sit close together | `embed` | **Validated** |
+| Reproducible / versioned refresh | Re-embeds only changed rows; a model or config bump reprocesses the whole corpus | `version_guard`, `content_hash`, `embedding_fn_fingerprint`, `incremental_delta_predicate` | **Validated** |
+| Governed retrieval | Ranks rows by cosine similarity to a query: exact, portable, no index required | `vector_search` | **Validated** |
+| Cross-source knowledge base | Unions sources into one shape, so a single search spans systems and cites origins | `knowledge_base` | **Validated** |
+| Groundedness & evaluation | Deterministic tests catching hallucinated quotes, off-taxonomy labels, and accuracy regressions | `grounded`, `conforms_to_schema`, `eval` | **Validated** |
+| Cost governance & audit | Stops oversized batches before they run, caps output spend, and logs what each run consumed | `guard_batch`, `log_ai_run`, `complete_ai_run`, `max_output_tokens` / `bq_thinking_budget` | **Built** (live cost reconciliation deferred) |
+| Free-form generation | Produces summaries, rewrites, and open answers when no label or field set fits | `generate` | **Beta** |
+| Typed extraction | Pulls facts present in the text into typed fields, each with an evidence quote | `extract` | **Beta** |
+| Portable AI output | Reads a structured AI result back as a plain scalar, identically on every engine | `text`, `field` | **Beta** |
+| Group-level reasoning | Reasons across every row in a group at once, instead of row by row | `ai_agg`, `guard_agg_batch` | **Beta** |
+| Managed / scaled vector index | Opt-in managed index for scale; separately billed, charges while idle, never automatic | `create_vector_index` | **Beta** |
+| Runtime drift monitoring | Re-embeds frozen probes each build, catching a provider silently returning different vectors | `embedding_canary` | **Beta** |
 
 ### Capabilities in beta
 

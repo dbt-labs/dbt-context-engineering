@@ -44,6 +44,61 @@ models:
       - name: source_rows
         tests: [not_null]
 
+  - name: chunk_edge_units
+    description: >
+      Unit fixture for chunk()'s data-shape edge cases: ADR-0002's worked example, an oversized
+      unit, a single-unit partition, and null / empty / all-null text.
+    columns:
+      - name: unit_id
+        tests: [unique, not_null]
+
+  - name: chunk_edges
+    description: >
+      chunk over chunk_edge_units (target=40, overlap=0, no label). Shape pinned exactly in
+      assert_chunk_edges; the null-text lineage properties in assert_chunk_null_lineage.
+    columns:
+      - name: chunk_id
+        tests: [unique, not_null]
+      - name: chunk_text
+        description: "Never null, even for an all-null partition, so a dropped unit is visible."
+        tests: [not_null]
+      - name: partition_hash
+        description: "Always emitted. Folds in chunk_fn_fingerprint, so a config change invalidates it."
+        tests: [not_null]
+      - name: exceeds_target
+        description: "token_estimate > target_tokens. True for a chunk holding an oversized unit."
+        tests: [not_null]
+
+  - name: chunk_edges_labeled
+    description: >
+      Same units and budget as chunk_edges but with label_column set. Exists for the null-text
+      case: without a coalesce, `label || ': ' || text` is null and the speaker attribution is
+      lost along with the text.
+    columns:
+      - name: chunk_id
+        tests: [unique, not_null]
+      - name: chunk_text
+        tests: [not_null]
+
+  - name: chunk_delta_units
+    description: >
+      Two-phase unit fixture (var cd_phase) for the partition-level incremental mechanism.
+      Phase 2 grows one partition, shrinks another so a chunk is vacated, and adds a third.
+    columns:
+      - name: unit_id
+        tests: [not_null]
+
+  - name: chunk_delta
+    description: >
+      chunk materialized incrementally, replacing whole partitions on partition_key. Asserted in
+      assert_chunk_delta across both phases. Not keyed on chunk_id: a re-chunk can renumber or
+      drop a partition's chunks, so chunk_id is not a stable identity to merge on.
+    columns:
+      - name: chunk_id
+        tests: [unique, not_null]
+      - name: partition_hash
+        tests: [not_null]
+
   - name: split_docs
     description: "split_sentences over the synthetic document seed (one row per sentence)."
     columns:

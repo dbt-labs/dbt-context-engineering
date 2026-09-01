@@ -289,6 +289,50 @@ catches it on each engine, not just duckdb.
 
 Rebuild both models together with matching vars afterward to leave the local database clean.
 
+### 4.5 The chunk partition-delta step
+
+`chunk()` computes a `partition_hash` over its input units and compares it against the stored value
+itself, rebuilding only the partitions whose content changed. Whether an untouched partition is
+genuinely *skipped*, and whether a partition that loses a chunk has that chunk *deleted*, only
+appears across sequential runs:
+
+```bash
+dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+  --select chunk_edge_units chunk_edges chunk_edges_labeled chunk_delta_units chunk_delta \
+           assert_chunk_edges assert_chunk_null_lineage assert_chunk_fingerprint assert_chunk_delta \
+  --full-refresh
+# ^ cd_phase defaults to 1: clean(2 units), grow(2), shrink(3 -> 2 chunks).
+dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+  --select chunk_delta_units chunk_delta assert_chunk_delta --vars '{cd_phase: 2}'
+# ^ grow gains a unit, shrink loses one (vacating a chunk), new appears, clean is untouched.
+```
+
+Phase 1 **requires** `--full-refresh`. Running it incrementally over a phase-2 table leaves the
+`new` partition behind: it is absent from the source, so it produces no rows, so no incremental
+strategy keyed on the partitions present in the incoming data ever deletes it. A partition deleted
+from source outlives its chunks until a full refresh. Reproduced on Snowflake and Databricks
+(5 rows, `new` surviving); BigQuery does not show it only because `chunk_delta` is a table there.
+
+`assert_chunk_delta`'s load-bearing branch is `orphan_chunk_survived_shrink`. Whole-partition
+replacement is required because a re-chunk can renumber or drop a partition's chunks, so `chunk_id`
+is not a stable identity to merge on. A `merge` on `partition_key` gets this silently wrong: it
+matches both stored `shrink` rows against the single incoming row and updates both, leaving a
+duplicate while reporting success. That is why BigQuery, whose only strategies are `merge`,
+`insert_overwrite` (which cannot partition on a `STRING` key) and `microbatch`, materializes
+`chunk_delta` as a table instead. `chunk()` is deterministic and zero-AI-cost, so a BigQuery full
+rebuild costs warehouse compute only, and a downstream `embed()` still skips re-embedding because
+`chunk_text` is byte-identical for unchanged partitions.
+
+The same two-build sequence runs on all three cloud targets with byte-identical model and test
+files (`--target snowflake/databricks/bigquery`), which is what makes the four-tier parity claim
+in ADR-0015 real here rather than nominal.
+
+`assert_chunk_fingerprint` needs no warehouse data and no second run: it compares
+`chunk_fn_fingerprint` across argument sets in Jinja and fails naming any argument the fingerprint
+ignores. Without that fingerprint folded into `partition_hash`, changing `target_tokens` alone
+leaves every input byte identical, so no partition looks dirty and the model serves output built
+under the previous configuration while reporting success.
+
 ---
 
 ## 5. What to look out for in the results

@@ -22,9 +22,26 @@ on real corpora, so we are building this in the open and want the community buil
 
 ## Why this exists
 
-For a decade we modeled data for one reader: the dashboard. AI added new readers like copilots, agents, and the warehouse's own AI SQL functions, that ask questions a dashboard never could. Answering them reliably is a modeling problem, and dbt already has the discipline for it: staging models, tests, docs, one governed DAG. Context engineering is that discipline pointed at a new reader.
+For a decade we modeled data for one reader: the dashboard. Every model, test, and metric existed
+so a person could look at a number and trust it. That work succeeded, and it is still very nearly
+all of what our community ships today.
 
-Every major warehouse now exposes AI as SQL functions, but the surfaces diverge enough that teams rebuild the same primitives on each platform. This package normalizes the ~80% that maps cleanly across engines and makes the divergent ~20% explicit configuration: never inferred, always documented, and it fails clearly.
+AI brought a new reader. Copilots and agents ask questions a dashboard never could, and they ask
+them of text and meaning, not just of aggregates. The warehouses have already invested on their
+side of this: every major engine now exposes AI as SQL functions, including embedding functions
+that turn text into vectors. What they have not defined is the patterns. The functions exist, but
+how to chunk a corpus so retrieval actually works, how to version a prompt, how to keep an
+embedding in sync with the text it came from, and how to test whether an answer is grounded are
+all still left to each team to reinvent.
+
+Those are modeling problems, and dbt already has the discipline for them: staging models, tests,
+docs, one governed DAG. Context engineering is that discipline pointed at the new reader. The
+opportunity is for analytics engineers to become the provider of trusted context for their
+organization, exactly as they became the provider of trusted metrics.
+
+Those AI surfaces also diverge enough that teams rebuild the same primitives on each platform.
+This package normalizes the ~80% that maps cleanly across engines and makes the divergent ~20%
+explicit configuration: never inferred, always documented, failing clearly.
 
 ## The tested path
 

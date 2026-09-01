@@ -27,17 +27,19 @@ Those AI surfaces also diverge enough that teams rebuild the same primitives on 
 Semantic search is the first context engineering design pattern we are putting forward, and the place to start. It is built, deployed, and validated end to end on Snowflake, Databricks, and BigQuery: the shortest route from raw text to governed, retrievable context, and the first step we would hand a team doing context engineering for the first time.
 
 ```
-        raw text                chunks              labeled chunks           vectors            answers
-   (transcripts, docs)   ┌────────────────┐   ┌──────────────────┐   ┌──────────────┐   ┌──────────────┐
-        ──────────────▶  │  1. CHUNK      │─▶ │  2. CLASSIFY     │─▶ │  3. EMBED    │─▶ │  4. SEARCH   │
-                         └────────────────┘   └──────────────────┘   └──────────────┘   └──────────────┘
-                          token-bounded,        typed AI label         governed          ranked cosine
-                          lineage-preserving     per chunk              embeddings         retrieval
+        raw text                chunks                  vectors               answers
+   (transcripts, docs)   ┌────────────────┐      ┌──────────────┐      ┌──────────────┐
+        ──────────────▶  │  1. CHUNK      │ ──▶  │  2. EMBED    │ ──▶  │  3. SEARCH   │
+                         └────────────────┘      └──────────────┘      └──────────────┘
+                          token-bounded,           governed              ranked cosine
+                          lineage-preserving        embeddings            retrieval
 ```
 
-**Chunk → classify → embed → search** is the shape of the pattern. It takes messy source text (call transcripts, support tickets, docs) and turns it into a searchable, labeled, lineage-preserving corpus an AI agent can read reliably. Each step is an ordinary dbt model. You write the pattern once and it runs on any of the three engines.
+**Chunk → embed → search** is the shape of the pattern. It takes messy source text (call transcripts, support tickets, docs) and turns it into a searchable, lineage-preserving corpus an AI agent can read. Each step is an ordinary dbt model. You write the pattern once and it runs on any of the three engines.
 
-The steps compose but are independently useful: you can chunk without embedding, and classify without searching. Together they are the path from "we have a pile of unstructured text" to "an agent can retrieve the three most relevant, labeled, citable passages about account X."
+The steps compose but are independently useful: you can chunk without embedding, and embed without searching. Together they are the path from "we have a pile of unstructured text" to "an agent can retrieve the most relevant, citable passages about account X."
+
+Three steps get you a working corpus. Getting *good* answers out of it takes one more move, which is where [classification](#embedding-buys-recall-classification-buys-precision) comes in — but that is an unlock on top of the pattern, not a prerequisite to it.
 
 One pattern is not a practice. Semantic search is the first of what we hope become many context engineering design patterns, a good share of them sourced from the community as the discipline gets built. This pattern is the on-ramp, not the whole package: the full set of capabilities context engineering requires, and how far each is built out, is in [The capabilities context engineering requires](#the-capabilities-context-engineering-requires) below.
 
@@ -63,26 +65,7 @@ See [ADR-0002](adr/0002-chunking-as-token-bounded-unit-packing.md), [ADR-0013](a
 
 ---
 
-## 2. Classify
-
-> An unlabeled corpus can only be searched; a labeled one can be filtered and audited. And a label is only as trustworthy as the prompt behind it, which is why prompts here are versioned code.
-
-`classify` puts a typed label from a closed set (signal, sentiment, risk) on each chunk. Its prompt and output schema are versioned macros (`prompt` / `schema_def`), so changing a taxonomy is a reviewable diff. Every AI call is guarded and logged: `guard_batch` stops a run before it overspends, `log_ai_run` records the cost.
-
-```sql
-select
-    chunk_id,
-    {{ dbt_context_engineering.classify('chunk_text',
-        dbt_context_engineering.prompt('EXAMPLE_signal_classify', 'v3'),
-        dbt_context_engineering.schema_def('EXAMPLE_signal_classify', 'v3')) }} as signal
-from {{ ref('stg_chunks') }}
-```
-
-See [ADR-0001](adr/0001-prompts-and-schemas-as-versioned-macros.md) (prompts as code) and [ADR-0003](adr/0003-cost-as-a-first-class-output.md) (cost), and the worked example for the guard/log hooks.
-
----
-
-## 3. Embed
+## 2. Embed
 
 > An embedding is a derived asset that goes stale the moment its source text or its model changes. Governing that refresh is most of what separates a trusted corpus from a pile of vectors.
 
@@ -92,29 +75,65 @@ See [ADR-0001](adr/0001-prompts-and-schemas-as-versioned-macros.md) (prompts as 
 select
     chunk_id,
     {{ dbt_context_engineering.embed('chunk_text') }} as embedding
-from {{ ref('stg_chunks_classified') }}
+from {{ ref('stg_chunks') }}
 ```
 
 See [ADR-0004](adr/0004-version-aware-incremental-refresh.md) and [ADR-0023](adr/0023-embedding-metadata-and-content-hash-delta.md), and the worked example, for the full governed incremental model.
 
 ---
 
-## 4. Search
+## 3. Search
 
 > Retrieval is the contract with the agent. A passage earns its place not by being similar, but by being similar, filterable, and traceable — so the agent can cite a source, not just paraphrase one.
 
-`vector_search` ranks the corpus by cosine similarity to a query vector: brute-force over the embedding column by default, no index to manage, filterable by the label from step 2 and carrying the lineage from step 1. `knowledge_base` unions many pre-embedded sources into one common shape, so a single search answers across systems at once.
+`vector_search` ranks the corpus by cosine similarity to a query vector: brute-force over the embedding column by default, no index to manage, carrying the lineage from step 1 and filterable by any column the corpus carries. `knowledge_base` unions many pre-embedded sources into one common shape, so a single search answers across systems at once.
 
 ```sql
 {{ dbt_context_engineering.vector_search(
     relation = ref('chunk_embeddings'), embedding_column = 'embedding',
-    query_embedding = dbt_context_engineering.embed('renewal risk'),
+    query_embedding = dbt_context_engineering.embed('late deliveries and what is driving them'),
     top_k = 10, id_column = 'chunk_id',
-    select_columns = ['signal', 'citation_url'], filter = "signal = 'at_risk'"
+    select_columns = ['citation_url']
 ) }}
 ```
 
 See [ADR-0005](adr/0005-retrieval-brute-force-default-index-opt-in.md) (retrieval) and [ADR-0006](adr/0006-knowledge-base-union-to-common-shape.md) (knowledge base), and the worked example.
+
+---
+
+## Embedding buys recall. Classification buys precision.
+
+> Semantic search finds text that means something like your query. That is not the same as finding the text you needed, and on a real corpus the gap between the two is wide enough to see.
+
+The three steps above are the pattern, and they work. But we ran them on a realistic corpus in [`jaffle-logistics`](https://github.com/dbt-labs/jaffle-logistics) — one account's story scattered across eight disconnected systems — and asked plain cosine similarity *"late deliveries and what is driving them."* The highest-scoring chunk for that account was six tokens long:
+
+| rank | chunk | score | what it actually is |
+|---|---|---|---|
+| 1 | `IR-9001::3` | 0.754 | a trailing fragment: *"Reviewed with dispatch."* |
+| 2–3, 5 | `IR-70xx::2` | 0.57–0.66 | unrelated incidents' boilerplate remediation lines |
+| 4, 6, 8–10 | `TKT-2000xx` | 0.55–0.58 | routine *"can you confirm the delivery window"* check-ins |
+| 7 | `CT-99021::2` | 0.565 | the one genuinely relevant chunk in the top 10 |
+
+The quarterly business reviews that actually document the root cause never made the top 10. The reason is structural, not a tuning problem: short and formulaic text sits near the center of embedding space, so it scores respectably against almost any query. Recall was fine. Precision was not.
+
+**`classify` is what closed the gap.** One typed label per chunk from a closed business taxonomy — is this an account assessment, a weather disruption, a handling error, routine status — then the same search, filtered to the category the question is actually about. Every row in the top 10 became real account content, in coherent order, with the boilerplate gone.
+
+```sql
+select
+    chunk_id,
+    {{ dbt_context_engineering.classify('chunk_text',
+        dbt_context_engineering.prompt('EXAMPLE_signal_classify', 'v3'),
+        dbt_context_engineering.schema_def('EXAMPLE_signal_classify', 'v3')) }} as classification
+from {{ ref('stg_chunks') }}
+```
+
+The label is a filter on `vector_search`, so retrieval narrows to the right category before ranking. Its prompt and schema are versioned macros, so changing a taxonomy is a reviewable diff rather than a silent edit, and every call is guarded and logged like any other AI call.
+
+Two honest limits, both of which we hit. That taxonomy was designed for the questions those demos ask, and a taxonomy that generalizes to questions nobody designed it for is unsolved work. And `classify` has no cache metadata the way `embed` does, so a rebuild relabels the whole corpus and the same text can land in a different category between runs. Filtering by category removes the wrong categories; it does not guarantee the best chunk within a category wins.
+
+This is why classification is an unlock rather than a fourth step. You can run the pattern without it, and what you learn by doing so is exactly why you will want it. The full ranked output for both queries, raw and filtered, is in the worked example's [comparison write-up](https://github.com/dbt-labs/jaffle-logistics).
+
+See [ADR-0001](adr/0001-prompts-and-schemas-as-versioned-macros.md) (prompts as code) and [ADR-0003](adr/0003-cost-as-a-first-class-output.md) (cost).
 
 ---
 
@@ -167,7 +186,7 @@ Semantic search is deliberately the simple route through. Behind it we mapped th
 
 These are not extras or afterthoughts. They are capabilities we know context engineering needs, which is why they already ship. They are simply less proven than semantic search — larger surface area, more per-engine divergence, narrower validation — so use them, and expect the edges to move as we and the community harden them.
 
-- **`generate`** / **`extract`**: the other two row-level AI operations. `generate` is free-form generation (plain text or a structured object); `extract` pulls a typed record of fields present in the text. `classify` (part of the semantic search pattern) covers the closed-set-label case; reach for these when you need free text or a multi-field typed extraction. See [ADR-0010](adr/0010-four-ai-operations.md). Read structured results back portably with `text()` / `field()` ([ADR-0008](adr/0008-normalizing-ai-output.md)).
+- **`generate`** / **`extract`**: the other two row-level AI operations. `generate` is free-form generation (plain text or a structured object); `extract` pulls a typed record of fields present in the text. `classify` (the precision unlock above) covers the closed-set-label case; reach for these when you need free text or a multi-field typed extraction. See [ADR-0010](adr/0010-four-ai-operations.md). Read structured results back portably with `text()` / `field()` ([ADR-0008](adr/0008-normalizing-ai-output.md)).
 - **`ai_agg`**: group-level aggregation (summarize a whole transcript, roll up sentiment across an account). Cross-adapter behavior diverges the most here; pair with `guard_agg_batch` on Databricks. See [ADR-0028](adr/0028-add-ai-agg-group-level-aggregation.md).
 - **`create_vector_index`**: opt-in, `dbt run-operation` **only** (never a model). Builds the engine's external, separately-billed index/service (Snowflake Cortex Search, BigQuery vector index; Databricks via its Vector Search API) for scale beyond the brute-force default. Stateful, with idle-serving cost, so drop it explicitly. See [ADR-0005](adr/0005-retrieval-brute-force-default-index-opt-in.md).
 - **`embedding_canary`**: runtime drift monitor. Re-embeds a small fixed probe set and compares it against a blessed baseline by cosine similarity, catching a provider silently changing a pinned model's behavior. **Disabled by default** (`monitoring: +enabled: false`); it makes real `embed()` calls, so add it only to a scheduled production job. See [ADR-0026](adr/0026-embedding-canary-runtime-drift-monitor.md).
@@ -194,7 +213,7 @@ Every capability in the table above is built. The cloud AI calls (`generate`, `c
 
 Every public object. All are called **package-qualified** (`dbt_context_engineering.<name>(...)`), like `dbt_utils.*`. Args shown with `=` have defaults.
 
-### Primary path (validated)
+### Validated
 
 #### Chunking
 

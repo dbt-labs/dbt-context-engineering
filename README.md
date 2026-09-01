@@ -83,8 +83,8 @@ See the whole path running on a realistic multi-source corpus in the worked exam
 
 ## 1. Chunk
 
-Retrieval quality is decided here, before any AI runs. A chunk that splits a sentence in half, or
-that merges two customers' calls, is not something a better model downstream can rescue.
+> Retrieval quality is decided before any AI runs. A chunk that splits a sentence in half, or
+> merges two customers' calls, is not something a better model downstream can rescue.
 
 `chunk` packs ordered text units (a transcript turn, a document sentence) into token-bounded
 chunks that never split a unit and never cross a partition key, carrying each unit's id into
@@ -107,9 +107,8 @@ metadata, and overlap options.
 
 ## 2. Classify
 
-An unlabeled corpus can only be searched. A labeled one can be filtered, audited, and reasoned
-about — and a label is only as trustworthy as the prompt that produced it, which is why prompts
-here are versioned code rather than a string someone edited last quarter.
+> An unlabeled corpus can only be searched; a labeled one can be filtered and audited. And a label
+> is only as trustworthy as the prompt behind it, which is why prompts here are versioned code.
 
 `classify` puts a typed label from a closed set (signal, sentiment, risk) on each chunk. Its
 prompt and output schema are versioned macros (`prompt` / `schema_def`), so changing a taxonomy is
@@ -133,9 +132,8 @@ guard/log hooks.
 
 ## 3. Embed
 
-An embedding is a derived asset, and it goes stale the moment its source text or its model
-changes. Treating that as an incremental modeling problem is most of what separates a governed
-corpus from a pile of vectors nobody can vouch for.
+> An embedding is a derived asset that goes stale the moment its source text or its model changes.
+> Governing that refresh is most of what separates a trusted corpus from a pile of vectors.
 
 `embed` turns each chunk into a vector, searchable by meaning, with the model pinned via
 `embedding_model` (a corpus embedded by one model cannot be searched by another). `embed()` alone
@@ -159,9 +157,8 @@ full governed incremental model.
 
 ## 4. Search
 
-Retrieval is the contract with the agent. A passage is not useful because it is similar; it is
-useful because it is similar, filterable, and traceable back to the row it came from — which is
-what lets an agent cite a source instead of merely paraphrasing one.
+> Retrieval is the contract with the agent. A passage earns its place not by being similar, but by
+> being similar, filterable, and traceable — so the agent can cite a source, not just paraphrase one.
 
 `vector_search` ranks the corpus by cosine similarity to a query vector: brute-force over the
 embedding column by default, no index to manage, filterable by the label from step 2 and carrying
@@ -185,8 +182,8 @@ example.
 
 ## Trust: making context testable
 
-Trusted metrics earned their trust from tests. Context has to earn it the same way — and asking a
-model to grade another model's output is not a test, it is a second opinion billed by the token.
+> Trusted metrics earned their trust from tests. Context has to earn it the same way, and asking a
+> model to grade another model is not a test: it is a second opinion, billed by the token.
 
 Three deterministic tests make AI output testable like any other dbt object, with no warehouse and
 no AI spend: `grounded` fails a row whose evidence quote isn't in its source text,

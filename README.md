@@ -4,15 +4,21 @@ A cross-platform dbt package that gives practitioners a reliable, portable toolk
 **context engineering** (modeling the data that AI agents read) across **Snowflake
 (Cortex), Databricks, and BigQuery**.
 
-It is **not** an agent, an MCP server, or a serving layer. It produces the governed context
-those systems read. Everything ships as ordinary dbt models, macros, seeds, and tests, reviewed
-in PRs, enforced by tests, and traceable in the DAG.
+Analytics engineers became the provider of trusted metrics for their organization. Context is the
+next thing they can own. This package produces it: the governed, tested, lineage-backed text and
+vectors that AI systems actually read. It is **not** an agent, an MCP server, or a serving layer;
+it makes the context those systems consume. Everything ships as ordinary dbt models, macros,
+seeds, and tests, reviewed in PRs, enforced by tests, and traceable in the DAG.
 
-This package is the product of deliberate exploration. We mapped the full set of capabilities
-context engineering requires, then built them out to different depths. That map, and where each
-piece stands, is in [The capabilities context engineering requires](#the-capabilities-context-engineering-requires)
-below. The reasoning behind every major choice is recorded across 28 ADRs in
-[`adr/`](adr/README.md).
+This package is dbt Labs' investment in helping our community level up for AI: a new frontier to
+push data work toward, and the first patterns for getting there. We have mapped the capabilities
+we believe context engineering requires and started building them out. Some are validated end to
+end on all three engines; others ship as beta while we harden them. That map, and where each piece
+stands, is in [The capabilities context engineering requires](#the-capabilities-context-engineering-requires)
+below; the reasoning behind every major choice is recorded in the ADRs in [`adr/`](adr/README.md).
+
+It is deliberately unfinished. The patterns that matter most will be the ones practitioners prove
+on real corpora, so we are building this in the open and want the community building it with us.
 
 ## Why this exists
 

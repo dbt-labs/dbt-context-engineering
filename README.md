@@ -11,10 +11,11 @@ it makes the context those systems consume. Everything ships as ordinary dbt mod
 seeds, and tests, reviewed in PRs, enforced by tests, and traceable in the DAG.
 
 This package is dbt Labs' investment in helping our community level up for AI: a new frontier to
-push data work toward, and the first patterns for getting there. We have mapped the capabilities
-we believe context engineering requires and started building them out. Some are validated end to
-end on all three engines; others ship as beta while we harden them. That map, and where each piece
-stands, is in [The capabilities context engineering requires](#the-capabilities-context-engineering-requires)
+push data work toward, and the first design pattern for getting there. We have mapped the
+capabilities we believe context engineering requires and started building them out. Some are
+validated end to end on all three engines; others ship as beta while we harden them. That map, and
+where each piece stands, is in
+[The capabilities context engineering requires](#the-capabilities-context-engineering-requires)
 below; the reasoning behind every major choice is recorded in the ADRs in [`adr/`](adr/README.md).
 
 It is deliberately unfinished. The patterns that matter most will be the ones practitioners prove
@@ -43,11 +44,12 @@ Those AI surfaces also diverge enough that teams rebuild the same primitives on 
 This package normalizes the ~80% that maps cleanly across engines and makes the divergent ~20%
 explicit configuration: never inferred, always documented, failing clearly.
 
-## The tested path
+## Design pattern: semantic search
 
-The clearest way into the package is one pipeline. It is the shortest route from raw text to
-governed, retrievable context, it is validated end to end on all three engines, and it exercises
-many of the package's capabilities at least once:
+Semantic search is the first context engineering design pattern we are putting forward, and the
+place to start. It is built, deployed, and validated end to end on Snowflake, Databricks, and
+BigQuery: the shortest route from raw text to governed, retrievable context, and the first step we
+would hand a team doing context engineering for the first time.
 
 ```
         raw text                chunks              labeled chunks           vectors            answers
@@ -58,16 +60,21 @@ many of the package's capabilities at least once:
                           lineage-preserving     per chunk              embeddings         retrieval
 ```
 
-**Chunk → classify → embed → search** is one of the main patterns in retrieval-augmented context: it takes
-messy source text (call transcripts, support tickets, docs) and turns it into a searchable,
-labeled, lineage-preserving corpus an AI agent can read reliably. Each step is an ordinary dbt
-model. You write the pattern once and it runs on any of the three engines.
+**Chunk → classify → embed → search** is the shape of the pattern. It takes messy source text
+(call transcripts, support tickets, docs) and turns it into a searchable, labeled,
+lineage-preserving corpus an AI agent can read reliably. Each step is an ordinary dbt model. You
+write the pattern once and it runs on any of the three engines.
 
-The steps compose but are independently useful. You can chunk without embedding and classify without searching. Together they're the path from "we have a pile of unstructured text" to "an agent can retrieve the three most relevant, labeled, citable passages about account X."
+The steps compose but are independently useful: you can chunk without embedding, and classify
+without searching. Together they are the path from "we have a pile of unstructured text" to "an
+agent can retrieve the three most relevant, labeled, citable passages about account X."
 
-The primary path is the on-ramp, not the whole package. The full set of capabilities context
-engineering requires, and how far each is built out, follows the path sections below in
-[The capabilities context engineering requires](#the-capabilities-context-engineering-requires).
+One pattern is not a practice. Semantic search is the first of what we hope become many context
+engineering design patterns, a good share of them sourced from the community as the discipline
+gets built. This pattern is the on-ramp, not the whole package: the full set of capabilities
+context engineering requires, and how far each is built out, is in
+[The capabilities context engineering requires](#the-capabilities-context-engineering-requires)
+below.
 
 See the whole path running on a realistic multi-source corpus in the worked example,
 [`jaffle-logistics`](https://github.com/dbt-labs/jaffle-logistics).
@@ -182,9 +189,9 @@ columns:
 
 ## The capabilities context engineering requires
 
-The primary path above is deliberately the simple route through. Behind it we mapped the full
-set of capabilities we believe context engineering requires, and built each one out. Some are
-validated end to end across all three engines; others are implemented but awaiting live
+The semantic search pattern above is deliberately the simple route through. Behind it we mapped
+the full set of capabilities we believe context engineering requires, and built each one out. Some
+are validated end to end across all three engines; others are implemented but awaiting live
 validation; others are a known requirement we are actively developing and treat as beta. The map
 is one thing, laid out with their associated maturity.
 
@@ -220,13 +227,14 @@ is one thing, laid out with their associated maturity.
 
 These are not extras or afterthoughts. They are capabilities we know context engineering needs,
 which is why they already ship in the package. They are not yet fully vetted (larger surface area,
-more per-engine divergence, or narrower validation than the primary path), so treat them as beta:
+more per-engine divergence, or narrower validation than the semantic search pattern), so treat
+them as beta:
 use them, and expect the edges to move as we and the community harden them.
 
 - **`generate`** / **`extract`**: the other two row-level AI operations. `generate` is free-form
   generation (plain text or a structured object); `extract` pulls a typed record of fields present
-  in the text. `classify` (on the primary path) covers the closed-set-label case; reach for these
-  when you need free text or a multi-field typed extraction. See
+  in the text. `classify` (part of the semantic search pattern) covers the closed-set-label case;
+  reach for these when you need free text or a multi-field typed extraction. See
   [ADR-0010](adr/0010-four-ai-operations.md). Read structured results back portably with
   `text()` / `field()` ([ADR-0008](adr/0008-normalizing-ai-output.md)).
 - **`ai_agg`**: group-level aggregation (summarize a whole transcript, roll up sentiment across
@@ -248,17 +256,17 @@ use them, and expect the edges to move as we and the community harden them.
 ## Direction and contributing
 
 We built this in the open and intend to keep developing it that way, in close collaboration with
-the **dbt community**. The primary path is validated across the three warehouses; the beta
-capabilities above are a known part of the discipline that we are actively hardening. The intent
-is that practitioners on Snowflake, Databricks, and BigQuery run it on real corpora, tell us where
-it breaks, contribute the patterns they have had to rebuild by hand, and help decide what
-graduates from beta into the validated core.
+the **dbt community**. The semantic search pattern is validated across the three warehouses; the
+beta capabilities above are a known part of the discipline that we are actively hardening. The
+intent is that practitioners on Snowflake, Databricks, and BigQuery run it on real corpora, tell
+us where it breaks, contribute the design patterns they have had to rebuild by hand, and help
+decide what graduates from beta into the validated core.
 
 [`jaffle-logistics`](https://github.com/dbt-labs/jaffle-logistics) is the reference project we
 develop alongside the package: a fictional logistics company whose data is scattered across
-roughly eight disconnected systems, run through the primary path into one governed, searchable
-knowledge base. It is where we prove patterns on a realistic multi-source corpus. Issues, PRs, and
-pattern proposals are all welcome.
+roughly eight disconnected systems, run through the semantic search pattern into one governed,
+searchable knowledge base. It is where we prove patterns on a realistic multi-source corpus.
+Issues, PRs, and pattern proposals are all welcome.
 
 ---
 

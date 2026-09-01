@@ -287,7 +287,41 @@ same `relationships_orphan_embeddings_chunk_id__chunk_id__ref_orphan_chunks_` te
 confirming the deliberate re-chunk step actually orphans rows and the relationships test actually
 catches it on each engine, not just duckdb.
 
-Rebuild both models together with matching vars afterward to leave the local database clean.
+`attach_metadata()` and `knowledge_base()` have the identical gap on their own keys: a `chunk_id`
+`attach_metadata()`'s `chunks_relation` stops producing, or a `source_key` a `knowledge_base()`
+source relation stops producing, is absent from the batch and so invisible to any delta comparison
+keyed on the current batch. `orphan_amd` and `orphan_kb` below extend the same relationships-test
+pattern to both, rather than an active, DELETE-based sweep, because a delete driven by *absence*
+cannot tell "this row was genuinely deleted upstream" from "one of the source relations came back
+empty because of a transient failure." A relationships test fails visibly in the second case; a
+sweep would delete every row from that source, silently, a worse outcome than the staleness it
+would fix.
+
+```bash
+dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+  --select orphan_chunks orphan_amd orphan_kb_source orphan_kb_valid_keys orphan_kb \
+  --full-refresh --vars '{oc_target_tokens: 20}'
+# simulate a re-chunk (orphan_amd's gap) and a source deleting a row (orphan_kb's gap)
+dbt run --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+  --select orphan_chunks --full-refresh --vars '{oc_target_tokens: 100}'
+dbt run --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+  --select orphan_kb_source orphan_kb_valid_keys --full-refresh --vars '{ok_include_k3: false}'
+dbt test --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+  --select relationships_orphan_amd_chunk_id__chunk_id__ref_orphan_chunks_ \
+           relationships_orphan_kb_source_key__source_key__ref_orphan_kb_valid_keys_
+# ^ expect both to FAIL. That is the point of this test.
+```
+
+`orphan_kb_valid_keys` exists only because `relationships` compares raw column values against
+another model's column, and `knowledge_base()`'s key (`source_type || '::' || source_id`) is
+synthesized, not a column any source relation carries on its own; this view re-derives it from
+`orphan_kb_source`'s current rows so there is something to point the test at.
+
+Mirrored on all three cloud targets against the same test names, confirming both the re-chunk and
+the source-deletion step actually orphan rows, and both relationships tests actually catch it, on
+every engine.
+
+Rebuild all five models together with matching vars afterward to leave the local database clean.
 
 ### 4.5 The chunk partition-delta step
 
@@ -332,6 +366,87 @@ in ADR-0015 real here rather than nominal.
 ignores. Without that fingerprint folded into `partition_hash`, changing `target_tokens` alone
 leaves every input byte identical, so no partition looks dirty and the model serves output built
 under the previous configuration while reporting success.
+
+### 4.6 The attach_metadata content-hash delta step
+
+`attach_metadata` computes its own `content_hash` from `chunk_text` plus every `metadata_columns`
+value, and compares it against the stored value on `this`, the same idea as 4.5 but simpler:
+`attach_metadata` never invents or renumbers `chunk_id`, so a plain `merge` on `chunk_id` is safe on
+every engine, no per-adapter strategy needed. Whether a metadata-only edit (chunk text unchanged,
+a joined column changed) is actually caught only appears across sequential runs:
+
+```bash
+dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+  --select attach_metadata_delta_meta_stg attach_metadata_delta assert_attach_metadata_delta \
+  --full-refresh
+# ^ amd_edit_id defaults to 'none': the unedited baseline.
+dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+  --select attach_metadata_delta_meta_stg attach_metadata_delta assert_attach_metadata_delta \
+  --vars '{amd_edit_id: doc_2}'
+# ^ doc_2's title changes; chunk_docs' own chunk_text for doc_2 is untouched.
+```
+
+`content_hash` is computed inside `attach_metadata()` itself, from the same `metadata_columns` list
+already passed to it, so there is exactly one place this formula is written, not a second,
+caller-maintained copy that can silently drift out of sync. Two mutations were run and reverted to
+confirm the test is not vacuous: removing the delta filter entirely (every row rewritten every run)
+failed `untouched_chunk_was_rewritten`, and dropping `metadata_columns` from the hash formula (the
+exact shape of the original bug) failed `edited_chunk_not_rebuilt`, four failures each time.
+
+No config fingerprint is needed the way chunk's `chunk_fn_fingerprint` is. `in_text` and
+`metadata_columns` are not blind spots the way `target_tokens` was for chunk: both already flow
+into what gets hashed, `in_text` through `chunk_text` itself and `metadata_columns` through the
+values it lists. Confirmed directly: reordering `metadata_columns`, toggling `in_text`, and adding a
+third column each changed every row's hash relative to a baseline with none of the three affecting
+it back.
+
+The same two-build sequence runs on all three cloud targets with byte-identical model and test
+files.
+
+### 4.7 The knowledge_base per-arm delta step
+
+`knowledge_base` synthesizes `source_key` (`source_type || '::' || source_id`) and computes
+`content_hash` per source arm, inside its own CTEs, then filters each arm to new-or-changed rows
+before the union rather than wrapping the whole union in an outer filter. Whether a whole untouched
+source is genuinely skipped, not just correctly deduplicated after a full re-scan, only appears
+across sequential runs:
+
+```bash
+dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+  --select kb_delta_tickets_stg kb_delta_calls_stg kb_delta assert_kb_delta --full-refresh
+# ^ kbd_phase defaults to 1: tickets t1/t2, calls c1.
+dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+  --select kb_delta_tickets_stg kb_delta_calls_stg kb_delta assert_kb_delta --vars '{kbd_phase: 2}'
+# ^ t2's text is edited, t3 appears, t1 and the ENTIRE calls source (c1) are untouched.
+```
+
+The calls arm is the point of this fixture. An outer wrap-and-filter around the whole union would
+still be correct, no duplicate rows, but it would fully scan, cast, and union the calls source
+every run regardless, before an outer `WHERE` ever narrowed anything. Filtering inside each arm
+means an untouched source contributes nothing past its own delta check, which is the actual compute
+saving going incremental is supposed to buy here.
+
+Two mutations were run and reverted to confirm the test is not vacuous: removing the delta filter
+entirely (every row rewritten every run) failed `untouched_row_was_rewritten`, and dropping `text`
+from the hash formula (the same shape as the original caller-assembled bug this pattern replaces)
+failed `edited_row_not_rebuilt`, three failures each time.
+
+`content_hash` deliberately does not cover `embedding`. Casting a `VECTOR`/`ARRAY` is itself
+engine-specific (the same reason `knowledge_base`'s own `text`/`ts` casts exist and `embedding`
+does not get one), and hashing one would reintroduce that non-portability for a narrow benefit.
+Consequence, not oversight: a source row whose upstream embedding changes with its text held
+constant is not caught as dirty here on that basis alone. `account_key` IS covered: a row
+re-parented to a different account is a real content change, not something to leave frozen.
+
+Merge on `source_key` is safe on every engine, the same reasoning as `attach_metadata`:
+`knowledge_base` never invents or renumbers a key, every row maps 1:1 to exactly one upstream row.
+Confirmed directly on all four engines, no BigQuery carve-out needed, unlike `chunk`.
+
+The cloud fixture reuses `embeddings`' already-computed vectors rather than calling `embed()`
+again (verified present on all three targets before every build in this session, to confirm zero
+new AI spend), and remaps its real `utterance_id` values onto the same `t1`/`t2`/`t3`/`c1` synthetic
+ids the duckdb fixture uses, so `assert_kb_delta.sql` is byte-identical in both projects rather than
+diverging over fixture-specific identifiers.
 
 ---
 

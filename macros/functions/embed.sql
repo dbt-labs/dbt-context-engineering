@@ -9,6 +9,8 @@
 -#}
 
 {% macro embed(input_column, model=none) -%}
+    {{ dbt_context_engineering.require_ai_functions_enabled('embed') }}
+    {{ dbt_context_engineering.require_safe_materialization('embed') }}
     {{ return(adapter.dispatch('embed', 'dbt_context_engineering')(input_column, model)) }}
 {%- endmacro %}
 

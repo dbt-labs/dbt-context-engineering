@@ -14,6 +14,11 @@ test-paths: ["tests"]
 target-path: "target"
 clean-targets: ["target", "dbt_packages"]
 
+# Bootstraps ai_run_log once, serially, before any threaded model execution begins. See
+# create_ai_run_log_table()'s own docstring for why this can't live inside the package itself
+on-run-start:
+  - "-- depends_on: {{ ref('ai_run_log') }}\n{{ dbt_context_engineering.create_ai_run_log_table() }}"
+
 vars:
   # Per-warehouse model endpoints (region/workspace-dependent; adjust if unavailable).
   model_generate: "{{ 'mistral-large2' if target.type == 'snowflake' else 'databricks-claude-haiku-4-5' if target.type == 'databricks' else 'gemini-2.5-flash' }}"

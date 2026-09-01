@@ -11,6 +11,8 @@
 -#}
 
 {% macro classify(input_column, prompt=none, output_schema=none, model=none) -%}
+    {{ dbt_context_engineering.require_ai_functions_enabled('classify') }}
+    {{ dbt_context_engineering.require_safe_materialization('classify') }}
     {%- if output_schema is none -%}
         {{ exceptions.raise_compiler_error("classify: output_schema is required (its enum is the label set).") }}
     {%- endif -%}

@@ -1,8 +1,16 @@
 {#-
-  log_ai_run: appends one row to ai_run_log per AI model run (spec §5.4). Creates ai_run_log
-  itself, via ensure_ai_run_log_exists(), the first time it runs against a target where the table
-  does not exist yet, so this hook still works on a `dbt run --select <single_model>` that never
-  builds ai_run_log directly.
+  log_ai_run: appends one row to ai_run_log per AI model run (spec §5.4). Assumes ai_run_log
+  already exists; it does NOT create it. Either select ai_run_log in the same invocation (dbt's
+  own DAG ordering, via the ref() below, then guarantees it builds before this hook fires), or
+  wire create_ai_run_log_table() into an on-run-start hook (see that macro's docstring).
+
+  Deliberately not a lazy self-create. Two or more AI-calling models, selected in the same
+  invocation with no dependency between them, run on different threads; a lazy self-create means
+  each one tries CREATE TABLE IF NOT EXISTS against the same target concurrently. Confirmed live:
+  DELTA_CONCURRENT_APPEND on Databricks, a table-write rate limit on BigQuery. If ai_run_log
+  genuinely does not exist when this hook fires, the INSERT below fails with the engine's own
+  "table/relation does not exist" error, naming the table directly; that is intentional, not a
+  gap to patch over with a friendlier wrapper.
 
   The inserted row starts at completed = false. Pair with complete_ai_run(), as a post_hook using
   the SAME function_name/model_name, to flip that row to true once the model finishes successfully.
@@ -85,8 +93,6 @@
         {%- set tokens_expr = "cast(null as " ~ num_t ~ ")" -%}
         {%- set cost_expr = "cast(null as " ~ num_t ~ ")" -%}
     {%- endif -%}
-
-    {{ dbt_context_engineering.ensure_ai_run_log_exists() }}
 
     insert into {{ ref('ai_run_log') }}
         (invocation_id, model_name, function_name, row_count, est_tokens, est_cost, run_at, completed)

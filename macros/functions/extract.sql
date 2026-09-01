@@ -5,6 +5,8 @@
 -#}
 
 {% macro extract(input_column, prompt=none, output_schema=none, model=none) -%}
+    {{ dbt_context_engineering.require_ai_functions_enabled('extract') }}
+    {{ dbt_context_engineering.require_safe_materialization('extract') }}
     {%- if output_schema is none -%}
         {{ exceptions.raise_compiler_error("extract: output_schema is required (it is the extraction contract).") }}
     {%- endif -%}

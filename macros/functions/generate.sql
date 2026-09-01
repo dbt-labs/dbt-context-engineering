@@ -12,6 +12,8 @@
 -#}
 
 {% macro generate(input_column, prompt, output_schema=none, model=none) -%}
+    {{ dbt_context_engineering.require_ai_functions_enabled('generate') }}
+    {{ dbt_context_engineering.require_safe_materialization('generate') }}
     {{ return(adapter.dispatch('generate', 'dbt_context_engineering')(
         input_column, prompt, output_schema, model
     )) }}

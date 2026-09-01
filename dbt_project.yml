@@ -64,6 +64,15 @@ vars:
   # Where the append-only AI run log is written (Phase 3).
   ai_run_log_relation: null
 
+  # Off by default so a fresh/CI target can never accidentally trigger a real, billed AI call.
+  # require_ai_functions_enabled() (macros/functions/require_prerequisites.sql) raises a
+  # compiler error naming this var when it is not explicitly set true; wiring that check into
+  # generate/classify/extract/embed/ai_agg's own dispatch is a separate, not-yet-built piece.
+  # create_ai_run_log_table() (macros/audit/) checks this var too, for a different reason: it
+  # decides whether an on-run-start bootstrap is worth doing at all this invocation, not
+  # whether an AI call is safe to make.
+  ai_functions_enabled: false
+
   # embedding_canary (runtime drift monitor, ADR-0026). Minimum cosine similarity a live probe
   # must retain against its blessed baseline. The same measure vector_search already uses to rank
   # results (ADR-0005): a threshold here means "would this difference change a search result,"

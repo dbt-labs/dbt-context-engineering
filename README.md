@@ -44,7 +44,7 @@ macros/
   chunking/                # chunk (unit packing) + split_sentences (layer-1 splitter) + array_agg/string_agg
   metadata/                # attach_metadata (non-dispatched: join source-level metadata onto chunks)
   cost/                    # guard_batch (guard) / estimate_tokens / log_ai_run / complete_ai_run
-  audit/                   # ai_run_log_columns_sql / ensure_ai_run_log_exists
+  audit/                   # ai_run_log_columns_sql / create_ai_run_log_table
   incremental/             # version_guard / incremental_delta_predicate
   embedding/               # content_hash / embedding_dimension / embedding_fn_fingerprint / embedding_logic_hash
   retrieval/               # vector_search
@@ -324,6 +324,40 @@ the information is technically present, just in the source of whichever upstream
 chunks, not anywhere a consumer looking at the embeddings table would think to check. Name which
 source columns and calls fed `embedding`/`chunk_text` in that column's `.yml` `description`,
 surfaced natively through `dbt docs generate`, rather than building anything new.
+
+**The embedded input expression must be defined once, in one macro, not restated between the
+staging model and the main model.** `content_hash` in `stg_docs_hashed` and the argument passed to
+`embed()` in `doc_embeddings` have to be the exact same expression, or the delta silently stops
+representing what is actually being embedded. Confirmed live: with `content_hash` computed over
+`body` alone while the real embedded text is `title || ': ' || body`, editing only the title left
+the row frozen indefinitely, no error, `dbt run` reporting success. The identical edit was caught
+immediately once the hash covered the same expression the embedding represents. `embed()` cannot
+close this gap internally the way `chunk()`/`attach_metadata()` close their own: it is a row-level
+scalar function with no visibility into the rest of the query (ADR-0012), so there is no `SELECT`
+it owns to compute a matching hash inside of. The fix is the same discipline a
+`content_hash_delta_filter()`-style macro already applies to the guard/log/body predicate: write
+the expression once, in a project-local macro, and call that macro from both files.
+
+```sql
+-- macros/doc_embed_input.sql
+{% macro doc_embed_input() %}title || ': ' || body{% endmacro %}
+```
+
+```sql
+-- models/stg_docs_hashed.sql (excerpt)
+select
+    doc_id,
+    body,
+    title,
+    {{ dbt_context_engineering.content_hash(doc_embed_input()) }} as content_hash
+from {{ ref('stg_docs') }}
+where body is not null and length(trim(body)) > 0
+```
+
+```sql
+-- models/doc_embeddings.sql (excerpt)
+{{ dbt_context_engineering.embed(doc_embed_input()) }} as embedding
+```
 
 **Which hook phase `log_ai_run` needs depends on what `relation`/`filter` actually reference, not
 on preference.** Three cases:

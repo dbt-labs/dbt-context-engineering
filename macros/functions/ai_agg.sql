@@ -27,6 +27,8 @@
         var('model_agg', var('model_generate', ...))).
 -#}
 {% macro ai_agg(input_column, prompt, order_column=none, model=none) -%}
+    {{ dbt_context_engineering.require_ai_functions_enabled('ai_agg') }}
+    {{ dbt_context_engineering.require_safe_materialization('ai_agg') }}
     {{ return(adapter.dispatch('ai_agg', 'dbt_context_engineering')(
         input_column, prompt, order_column, model
     )) }}

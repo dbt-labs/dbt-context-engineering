@@ -198,3 +198,96 @@ models:
         tests: [not_null]
       - name: recording_url
         tests: [not_null]
+
+  - name: attach_metadata_delta_meta_stg
+    description: >
+      Two-phase metadata fixture (var amd_edit_id) mirroring content_hash_delta_stg's pattern.
+      Simulates a metadata-only edit: one document's title changes while chunk_docs' own
+      chunk_text (and every other document's title) stays exactly the same.
+    columns:
+      - name: document_id
+        tests: [not_null]
+
+  - name: attach_metadata_delta
+    description: >
+      attach_metadata materialized incrementally, unique_key=chunk_id, plain merge (no strategy
+      override needed: attach_metadata never invents or renumbers chunk_id, so a merge key here
+      matches at most one stored row). content_hash is computed inside attach_metadata itself
+      from chunk_text plus metadata_columns, not caller-assembled. Asserted in
+      assert_attach_metadata_delta across both phases.
+    columns:
+      - name: chunk_id
+        tests: [unique, not_null]
+      - name: content_hash
+        tests: [not_null]
+
+  - name: kb_delta_tickets_stg
+    description: >
+      Two-phase source fixture (var kbd_phase) for knowledge_base's per-arm incremental
+      mechanism. Phase 2 edits t2's text and introduces t3; t1 is untouched.
+    columns:
+      - name: ticket_id
+        tests: [not_null]
+
+  - name: kb_delta_calls_stg
+    description: >
+      Paired with kb_delta_tickets_stg. Never edited across either phase: the whole-untouched-
+      source-arm control for assert_kb_delta.
+    columns:
+      - name: call_id
+        tests: [not_null]
+
+  - name: kb_delta
+    description: >
+      knowledge_base materialized incrementally, unique_key=source_key, plain merge (no strategy
+      override needed: knowledge_base never invents or renumbers source_key, so a merge key here
+      matches at most one stored row). source_key (source_type || '::' || source_id) and
+      content_hash are computed inside knowledge_base itself, per source arm, before the union,
+      not caller-assembled and not an outer wrap-and-filter. Asserted in assert_kb_delta across
+      both phases.
+    columns:
+      - name: source_key
+        tests: [unique, not_null]
+      - name: content_hash
+        tests: [not_null]
+
+  - name: orphan_amd
+    description: >
+      attach_metadata over orphan_chunks (var-driven target_tokens, same fixture orphan_embeddings
+      uses). The relationships test below proves a chunk_id that orphan_chunks stops producing
+      after a re-chunk is a loud, testable failure in attach_metadata's own output too, not just
+      in a downstream embedding table.
+    columns:
+      - name: chunk_id
+        tests:
+          - relationships:
+              to: ref('orphan_chunks')
+              field: chunk_id
+
+  - name: orphan_kb_source
+    description: >
+      var-driven row count (ok_include_k3) so this can be rebuilt with a row removed entirely,
+      simulating a knowledge_base source deleting a record.
+    columns:
+      - name: item_id
+        tests: [unique, not_null]
+
+  - name: orphan_kb_valid_keys
+    description: >
+      orphan_kb_source's current rows under knowledge_base's own source_key synthesis
+      (source_type || '::' || source_id), so a relationships test has a target to compare against.
+    columns:
+      - name: source_key
+        tests: [unique, not_null]
+
+  - name: orphan_kb
+    description: >
+      knowledge_base over orphan_kb_source. The relationships test below proves a source_key that
+      orphan_kb_source stops producing (a row deleted upstream) is a loud, testable failure, the
+      same shape as orphan_amd and orphan_embeddings.
+    columns:
+      - name: source_key
+        tests:
+          - relationships:
+              to: ref('orphan_kb_valid_keys')
+              field: source_key

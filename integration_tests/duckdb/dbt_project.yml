@@ -13,6 +13,11 @@ test-paths: ["tests"]
 target-path: "target"
 clean-targets: ["target", "dbt_packages"]
 
+# Bootstraps ai_run_log once, serially, before any threaded model execution begins. See
+# create_ai_run_log_table()'s own docstring for why this can't live inside the package itself
+on-run-start:
+  - "-- depends_on: {{ ref('ai_run_log') }}\n{{ dbt_context_engineering.create_ai_run_log_table() }}"
+
 vars:
   chunk_target_tokens: 512
   chunk_overlap_tokens: 0

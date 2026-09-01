@@ -1,9 +1,9 @@
 {#-
   ai_run_log_columns_sql(): the single source of truth for ai_run_log's column list and types.
   Shared by the model's own defining SELECT (models/audit/ai_run_log.sql) and by
-  ensure_ai_run_log_exists(), which creates the same empty, typed table directly when a hook needs
-  to write to ai_run_log before the model has ever been dbt-built. Emits NO rows (where 1=0) — it
-  exists purely to fix column names/types in one place.
+  create_ai_run_log_table(), which creates the same empty, typed table directly for a consumer's
+  own on-run-start hook, before the model has ever been dbt-built in that target. Emits NO rows
+  (where 1=0), it exists purely to fix column names/types in one place.
 -#}
 {% macro ai_run_log_columns_sql() -%}
 select

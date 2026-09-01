@@ -16,9 +16,15 @@ It is deliberately unfinished. The patterns that matter most will be the ones pr
 
 For a decade we modeled data for one reader: the dashboard. Every model, test, and metric existed so a person could look at a number and trust it. That work succeeded, and it is still very nearly all of what our community ships today.
 
-AI brought a new reader. Copilots and agents ask questions a dashboard never could, and they ask them of text and meaning, not just of aggregates. The warehouses have already invested on their side of this: every major engine now exposes AI as SQL functions, including embedding functions that turn text into vectors. What they have not defined is the patterns. The functions exist, but how to chunk a corpus so retrieval actually works, how to version a prompt, how to keep an embedding in sync with the text it came from, and how to test whether an answer is grounded are all still left to each team to reinvent.
+But aggregation is a one-way door. A metric is thousands of rows compressed into something a person can read at a glance, and the compression does not run backwards: slicing by dimension re-cuts the same roll-up, it never returns the grain underneath. So every number a dashboard puts on a screen sets off the same three questions — why did it move, which ones, what do we do about it — and the chart cannot answer any of them. Those questions become a ticket in the data team's queue, and the answer arrives next week.
 
-Those are modeling problems, and dbt already has the discipline for them: staging models, tests, docs, one governed DAG. Context engineering is that discipline pointed at the new reader. The opportunity is for analytics engineers to become the provider of trusted context for their organization, exactly as they became the provider of trusted metrics.
+The detail was never deleted. It is sitting in the warehouse already: the call transcripts, support tickets, CRM notes, contracts, and emails your pipelines have been landing for years. Nobody modeled it because there is no bar chart that can express a call transcript, so it stayed below the waterline. The metric made it onto the chart; the story explaining the metric stayed behind in the tables.
+
+AI is the first reader that can actually consume that story, and it is reaching for far more kinds of data than our modeling practices were built to serve, using retrieval techniques the industry is still writing the best practices for. The warehouses have moved: every major engine now exposes AI as SQL functions, including embedding functions that turn text into vectors. What none of them has defined is the patterns. How to chunk a corpus so retrieval actually works, how to version a prompt, how to keep an embedding in sync with the text it came from, and how to test whether an answer is grounded are all still left to each team to reinvent.
+
+Those are modeling problems, and dbt already has the discipline for them: staging models, tests, docs, one governed DAG. Context engineering is that discipline pointed at the new reader.
+
+Someone has to own the governed, trusted context feeding their organization's AI, and that job is currently open. It is also a bigger job than the one before it: more people are putting questions to these systems, far more often, than ever opened even the best-designed dashboard. Aggregates are not wrong and dashboards are not going away. The move is to keep modeling — building the marts that model detail back down into context alongside the ones that roll it up into metrics.
 
 Those AI surfaces also diverge enough that teams rebuild the same primitives on each platform. This package normalizes the ~80% that maps cleanly across engines and makes the divergent ~20% explicit configuration: never inferred, always documented, failing clearly.
 
@@ -37,7 +43,7 @@ Semantic search is the first context engineering design pattern we are putting f
 
 **Chunk → embed → search** is the shape of the pattern. It takes messy source text (call transcripts, support tickets, docs) and turns it into a searchable, lineage-preserving corpus an AI agent can read. Each step is an ordinary dbt model. You write the pattern once and it runs on any of the three engines.
 
-The steps compose but are independently useful: you can chunk without embedding, and embed without searching. Together they are the path from "we have a pile of unstructured text" to "an agent can retrieve the most relevant, citable passages about account X."
+The steps compose but are independently useful: you can chunk without embedding, and embed without searching. Together they turn a pile of unstructured text into something an agent can answer from, with a citation: why on-time delivery slipped last quarter and which accounts drove it, what the contract actually committed us to, what the internal runbook says about a process nobody has written down twice.
 
 Three steps get you a working corpus. Getting *good* answers out of it takes one more move, which is where [classification](#embedding-buys-recall-classification-buys-precision) comes in — but that is an unlock on top of the pattern, not a prerequisite to it.
 

@@ -206,11 +206,9 @@ columns:
 
 ## The capabilities context engineering requires
 
-The semantic search pattern above is deliberately the simple route through. Behind it we mapped
-the full set of capabilities we believe context engineering requires, and built each one out. Some
-are validated end to end across all three engines; others are implemented but awaiting live
-validation; others are a known requirement we are actively developing and treat as beta. The map
-is one thing, laid out with their associated maturity.
+Semantic search is deliberately the simple route through. Behind it we mapped the capabilities we
+believe the practice requires and built each one out, though not all to the same depth. The map
+below is the honest version: what a team needs, what delivers it, and how far we have taken it.
 
 **Maturity levels**
 
@@ -243,10 +241,9 @@ is one thing, laid out with their associated maturity.
 ### Capabilities in beta
 
 These are not extras or afterthoughts. They are capabilities we know context engineering needs,
-which is why they already ship in the package. They are not yet fully vetted (larger surface area,
-more per-engine divergence, or narrower validation than the semantic search pattern), so treat
-them as beta:
-use them, and expect the edges to move as we and the community harden them.
+which is why they already ship. They are simply less proven than semantic search — larger surface
+area, more per-engine divergence, narrower validation — so use them, and expect the edges to move
+as we and the community harden them.
 
 - **`generate`** / **`extract`**: the other two row-level AI operations. `generate` is free-form
   generation (plain text or a structured object); `extract` pulls a typed record of fields present
@@ -272,35 +269,30 @@ use them, and expect the edges to move as we and the community harden them.
 
 ## Direction and contributing
 
-We built this in the open and intend to keep developing it that way, in close collaboration with
-the **dbt community**. The semantic search pattern is validated across the three warehouses; the
-beta capabilities above are a known part of the discipline that we are actively hardening. The
-intent is that practitioners on Snowflake, Databricks, and BigQuery run it on real corpora, tell
-us where it breaks, contribute the design patterns they have had to rebuild by hand, and help
-decide what graduates from beta into the validated core.
+A practice does not get defined by one package or one vendor. We have shipped the first design
+pattern and the capabilities underneath it; what we want back is the patterns you have had to
+rebuild by hand, the places this breaks on a real corpus, and your read on what should graduate
+from beta into the validated core.
 
 [`jaffle-logistics`](https://github.com/dbt-labs/jaffle-logistics) is the reference project we
 develop alongside the package: a fictional logistics company whose data is scattered across
-roughly eight disconnected systems, run through the semantic search pattern into one governed,
-searchable knowledge base. It is where we prove patterns on a realistic multi-source corpus.
-Issues, PRs, and pattern proposals are all welcome.
+roughly eight disconnected systems, run through semantic search into one governed, searchable
+knowledge base. It is where we prove patterns on a realistic multi-source corpus. Issues, PRs, and
+pattern proposals are all welcome.
 
 ---
 
 ## Status & testing
 
-The full toolkit is built: chunking, AI function wrappers, the prompt/schema library, the cost
-guard and run log, the incremental pattern + `version_guard`, retrieval, the knowledge base, and
-context evaluation.
+Every capability in the table above is built. The cloud AI calls (`generate`, `classify`,
+`extract`, `embed`, `vector_search`) have executed successfully on Snowflake, Databricks, and
+BigQuery against **mock sample data**, and chunking, prompt resolution/rendering, the cost guard,
+and the AI run log execute **deterministically on duckdb**. Not yet validated: real production
+data at scale, and cost reconciliation against engine usage tables.
 
-Testing posture: the cloud AI calls (`generate`, `classify`, `extract`, `embed`, `vector_search`)
-have **executed successfully on all three engines** (Snowflake, Databricks, BigQuery) against
-**mock sample data**, alongside **full deterministic execution on duckdb** of chunking, prompt
-resolution/rendering, the cost guard, and the AI run log. Not yet validated: execution against
-real production data at scale, and cost reconciliation against engine usage tables (built,
-`LIVE-VALIDATION DEFERRED`).
-
-**How to run the tests in each environment and what to check is in** [`TESTING.md`](TESTING.md)**. The *why* behind each design choice is recorded as ADRs in** [`adr/`](adr/README.md)**.**
+**How to run the tests in each environment, and what to check, is in**
+[`TESTING.md`](TESTING.md)**. The *why* behind each design choice is recorded as ADRs in**
+[`adr/`](adr/README.md)**.**
 
 ---
 

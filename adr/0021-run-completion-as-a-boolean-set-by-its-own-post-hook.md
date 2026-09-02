@@ -2,7 +2,15 @@
 
 ## Status
 
-Accepted, 2026-08-12.
+Accepted, 2026-08-12. Two of this record's mechanisms are superseded. The unconditional
+`ensure_ai_run_log_exists()` self-create is superseded by
+[ADR-0030](0030-ai-function-spend-gating-and-ai-run-log-write-safety.md): it raced under
+concurrent model execution and is replaced by `create_ai_run_log_table()`, bootstrapped once via
+an `on-run-start` hook. The `completed` boolean and its in-place `UPDATE` are superseded by
+[ADR-0031](0031-run-completion-as-an-event-sourced-append.md): `UPDATE` conflicted the same
+way under concurrency and is replaced by an `event` column written by a second `INSERT`. The
+reasoning for needing a completion signal at all, and for tracking it purely in model hooks,
+stands.
 
 ## Concept
 

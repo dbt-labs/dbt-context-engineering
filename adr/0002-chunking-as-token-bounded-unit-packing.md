@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted, 2026-07-30.
+Accepted, 2026-07-30. The worked example in Concept is superseded by
+[ADR-0029](0029-chunk-partition-level-incremental-and-data-shape-guarantees.md); the
+decision and its principles stand.
 
 ## Concept
 
@@ -37,6 +39,15 @@ turn 3 (25 tok)  ┐
 turn 4 (12 tok)  ┘ chunk 2  (37 tok)
 turn 5 (30 tok)  → chunk 3  (30 tok)
 ```
+
+> **Superseded by [ADR-0029](0029-chunk-partition-level-incremental-and-data-shape-guarantees.md)
+> (draft).** The diagram above depicts greedy first-fit packing, closing a chunk before admitting
+> the unit that would exceed the budget. The implementation has never done this. It assigns chunks
+> with `floor(cum_before / step)`, which has no lookahead, so the unit that crosses a boundary joins
+> the *current* chunk. The same five units produce two chunks of 61 and 43 tokens, both over budget,
+> identically on all four engines. The principle the example illustrates is unchanged: the cap is
+> soft because units are atomic. Only the packing it depicts is wrong. ADR-0029 records why the
+> greedy form was not adopted instead.
 
 ## Context
 

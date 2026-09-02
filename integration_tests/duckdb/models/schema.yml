@@ -19,8 +19,9 @@ models:
       - name: chunk_id
         tests:
           - relationships:
-              to: ref('orphan_chunks')
-              field: chunk_id
+              arguments:
+                to: ref('orphan_chunks')
+                field: chunk_id
 
   - name: chunk_utterances
     description: "chunk output over the synthetic transcript seed (target_tokens=40)."
@@ -99,6 +100,31 @@ models:
       - name: partition_hash
         tests: [not_null]
 
+  - name: chunk_fp_probe_units
+    description: >
+      unit_id_alias holds the exact same values as unit_id under a different column name, so
+      passing id_column=unit_id_alias to chunk() bumps chunk_fn_fingerprint without changing any
+      actual output. ADR-0029 verification fixture: confirms the downstream embed() no-op across
+      a pure fingerprint bump, not just reasoned from determinism.
+
+  - name: chunk_fp_probe_chunks
+    description: "chunk() over chunk_fp_probe_units, id_column toggled by var fp_probe_id_col."
+    columns:
+      - name: chunk_id
+        tests: [unique, not_null]
+
+  - name: chunk_fp_probe_chunks_hashed
+    description: "content_hash over chunk_fp_probe_chunks' chunk_text, as a real column for guard_batch/log_ai_run to filter on."
+
+  - name: chunk_fp_probe_embed
+    description: >
+      Stand-in embed() step (literal vector, not a real call — the mechanism under test is the
+      delta/metering plumbing, the same precedent content_hash_delta uses). Asserted in
+      assert_chunk_fp_probe across both phases; see TESTING.md 4.9.
+    columns:
+      - name: chunk_id
+        tests: [unique, not_null]
+
   - name: split_docs
     description: "split_sentences over the synthetic document seed (one row per sentence)."
     columns:
@@ -140,7 +166,8 @@ models:
         description: "Each quote is grounded in input_text — grounded asserts it."
         tests:
           - dbt_context_engineering.grounded:
-              source_text_column: input_text
+              arguments:
+                source_text_column: input_text
       - name: predicted_label
         description: "Must be one of the EXAMPLE_signal_classify v3 taxonomy labels (asserted by
           the assert_conforms singular test, which resolves the enum from schema)."
@@ -174,6 +201,21 @@ models:
         tests: [not_null]
       - name: citation_url
         tests: [not_null]
+
+  - name: amd_null_meta_source
+    description: "Metadata edge-case fixture, joined against chunk_docs' real partition keys: doc_1 real values (baseline), doc_2 two rows both agreeing on null, doc_3 unmatched."
+
+  - name: amd_null_meta
+    description: "attach_metadata over chunk_docs joined against amd_null_meta_source (default in_text=False) — proves a consistently-null metadata value passes through cleanly, no fan-out."
+    columns:
+      - name: chunk_id
+        tests: [unique, not_null]
+
+  - name: amd_null_meta_text
+    description: "Same as amd_null_meta with in_text=True — proves a null value renders as an empty line in the prepended block, not a literal null/None string."
+    columns:
+      - name: chunk_id
+        tests: [unique, not_null]
 
   - name: canary_calibration
     description: "Known-cosine fixtures (0.9999/0.999/0.99/0.95 vs [1,2,3]) for
@@ -261,8 +303,9 @@ models:
       - name: chunk_id
         tests:
           - relationships:
-              to: ref('orphan_chunks')
-              field: chunk_id
+              arguments:
+                to: ref('orphan_chunks')
+                field: chunk_id
 
   - name: orphan_kb_source
     description: >
@@ -289,5 +332,6 @@ models:
       - name: source_key
         tests:
           - relationships:
-              to: ref('orphan_kb_valid_keys')
-              field: source_key
+              arguments:
+                to: ref('orphan_kb_valid_keys')
+                field: source_key

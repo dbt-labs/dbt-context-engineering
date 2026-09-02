@@ -30,9 +30,9 @@
     10-row fixture; utterance_id 6-10 is the real incremental delta (5 rows). log_ai_run's row
     from phase 2 records row_count=5, the actual number of rows this run processed.
 
-    complete_ai_run runs as a post_hook (safe here even though log_ai_run is a pre_hook — its
-    UPDATE is keyed on invocation_id/function_name/model_name, never on `this`) and flips that same
-    row to completed=true once the model body finishes.
+    complete_ai_run runs as a post_hook (safe here even though log_ai_run is a pre_hook — it never
+    references `this`) and appends a SEPARATE row at event='completed' for the same invocation
+    once the model body finishes.
  -#}
 select utterance_id, utterance_text
 from {{ ref('fixture_utterances') }}

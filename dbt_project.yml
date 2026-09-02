@@ -42,6 +42,12 @@ vars:
   max_batch_rows: 10000
   max_est_tokens: 5000000
 
+  # Dev-mode row sampling (dev_sample_filter, macros/cost/). null => no sampling, full corpus.
+  # A dev-experience convenience keeping a dev/CI run far below the ceilings above, not a
+  # spend-safety mechanism itself (that's guard_batch/ai_functions_enabled's job) and not
+  # something any model applies unless it calls dev_sample_filter() itself.
+  ai_sample_rows: null      # e.g. 50
+
   # OUTPUT-side cost control. The guard above only bounds INPUT tokens, so it cannot catch an
   # output blowup. null => vendor default (nothing emitted).
   #   max_output_tokens — cross-engine response cap. Snowflake AI_COMPLETE `max_tokens`,
@@ -66,11 +72,11 @@ vars:
 
   # Off by default so a fresh/CI target can never accidentally trigger a real, billed AI call.
   # require_ai_functions_enabled() (macros/functions/require_prerequisites.sql) raises a
-  # compiler error naming this var when it is not explicitly set true; wiring that check into
-  # generate/classify/extract/embed/ai_agg's own dispatch is a separate, not-yet-built piece.
-  # create_ai_run_log_table() (macros/audit/) checks this var too, for a different reason: it
-  # decides whether an on-run-start bootstrap is worth doing at all this invocation, not
-  # whether an AI call is safe to make.
+  # compiler error naming this var when it is not explicitly set true; called from
+  # generate/classify/extract/embed/ai_agg's own dispatch, so calling any of them unavoidably
+  # runs the check. create_ai_run_log_table() (macros/audit/) checks this var too, for a
+  # different reason: it decides whether an on-run-start bootstrap is worth doing at all this
+  # invocation, not whether an AI call is safe to make.
   ai_functions_enabled: false
 
   # embedding_canary (runtime drift monitor, ADR-0026). Minimum cosine similarity a live probe

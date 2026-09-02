@@ -1,17 +1,23 @@
 {#-
-  complete_ai_run: flips the ai_run_log row log_ai_run inserted for THIS invocation from
-  completed = false to true, once the model has finished successfully. A post_hook ONLY — dbt
-  never runs a model's post_hook when the model errors, so an incomplete run's row is simply
-  never flipped.
+  complete_ai_run: appends a second ai_run_log row for THIS invocation, at event = 'completed',
+  once the model has finished successfully. A post_hook ONLY — dbt never runs a model's post_hook
+  when the model errors, so an incomplete run simply never gets a 'completed' row. Completion is
+  read as an existence check (a 'completed' row matching invocation_id/function_name/model_name),
+  not as a mutated field on the 'started' row log_ai_run inserted.
 
-  Pass the SAME function_name/model_name given to the paired log_ai_run call on this model, so the
-  UPDATE targets exactly the row that call inserted this invocation (matched on invocation_id +
-  function_name + model_name + completed = false; that last filter makes a repeated call
-  idempotent).
+  A pure INSERT, not an UPDATE. Two or more AI-calling models, selected in the same invocation with
+  no dependency between them, run on different threads and pair log_ai_run/complete_ai_run
+  independently. Two concurrent appends to the same table are not writes to the same row, so
+  nothing here conflicts the way a concurrent UPDATE against a shared table would. See ADR-0031
+  for the live evidence.
+
+  Pass the SAME function_name/model_name given to the paired log_ai_run call on this model, so a
+  downstream reconciliation can join this row back to the 'started' row it completes, on
+  invocation_id + function_name + model_name.
 
   Usage (pairs with log_ai_run — see its docstring for the pre_hook-vs-post_hook rule when
-  `filter` is `this`-derived; complete_ai_run itself has no such hazard, since its UPDATE is keyed
-  on invocation_id/function_name/model_name, never on `this`, so it is always safe as a post_hook):
+  `filter` is `this`-derived; complete_ai_run itself has no such hazard, since it never
+  references `this`, so it is always safe as a post_hook):
     {{ config(
          post_hook = [
            "{{ log_ai_run('classify', model_name='claude-3-5-sonnet') }}",
@@ -26,11 +32,16 @@
 {% macro complete_ai_run(function_name, model_name=none) -%}
     {#- No execute-guard: the ref() below must always render for dbt to infer the ai_run_log
         dependency, same as log_ai_run. -#}
-    {%- set model_clause = "model_name = '" ~ model_name ~ "'" if model_name is not none else "model_name is null" -%}
-    update {{ ref('ai_run_log') }}
-    set completed = true
-    where invocation_id = '{{ invocation_id }}'
-      and function_name = '{{ function_name }}'
-      and {{ model_clause }}
-      and completed = false
+    {%- set model_sql = "'" ~ model_name ~ "'" if model_name is not none else "cast(null as " ~ dbt.type_string() ~ ")" -%}
+    insert into {{ ref('ai_run_log') }}
+        (invocation_id, model_name, function_name, row_count, est_tokens, est_cost, run_at, event)
+    select
+        '{{ invocation_id }}',
+        {{ model_sql }},
+        '{{ function_name }}',
+        cast(null as {{ dbt.type_int() }}),
+        cast(null as {{ dbt.type_numeric() }}),
+        cast(null as {{ dbt.type_numeric() }}),
+        cast({{ dbt.current_timestamp() }} as {{ dbt.type_timestamp() }}),
+        'completed'
 {%- endmacro %}

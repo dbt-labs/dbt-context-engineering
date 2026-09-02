@@ -29,6 +29,7 @@
 {% macro ai_agg(input_column, prompt, order_column=none, model=none) -%}
     {{ dbt_context_engineering.require_ai_functions_enabled('ai_agg') }}
     {{ dbt_context_engineering.require_safe_materialization('ai_agg') }}
+    {{ dbt_context_engineering.require_full_refresh_gate('ai_agg') }}
     {{ return(adapter.dispatch('ai_agg', 'dbt_context_engineering')(
         input_column, prompt, order_column, model
     )) }}
@@ -36,9 +37,14 @@
 
 
 {% macro default__ai_agg(input_column, prompt, order_column, model) -%}
-    {{ exceptions.raise_compiler_error(
-        "ai_agg is not implemented for the '" ~ target.type ~ "' adapter. "
-        ~ "Supported: snowflake, databricks, bigquery.") }}
+    {#- execute-gated, same reasoning as default__embed: this return value is spliced into the
+        caller's own SELECT, so parse time needs a valid placeholder, not an empty string. -#}
+    {%- if execute -%}
+        {{ exceptions.raise_compiler_error(
+            "ai_agg is not implemented for the '" ~ target.type ~ "' adapter. "
+            ~ "Supported: snowflake, databricks, bigquery.") }}
+    {%- endif -%}
+    {{ return('null') }}
 {%- endmacro %}
 
 

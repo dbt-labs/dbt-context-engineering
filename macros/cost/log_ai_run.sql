@@ -12,9 +12,13 @@
   "table/relation does not exist" error, naming the table directly; that is intentional, not a
   gap to patch over with a friendlier wrapper.
 
-  The inserted row starts at completed = false. Pair with complete_ai_run(), as a post_hook using
-  the SAME function_name/model_name, to flip that row to true once the model finishes successfully.
-  A model that errors mid-run never reaches its post_hook, so its row simply stays false.
+  The inserted row carries event = 'started'. Pair with complete_ai_run(), as a post_hook using the
+  SAME function_name/model_name, which appends a second row for this invocation at event =
+  'completed' once the model finishes successfully. A model that errors mid-run never reaches its
+  post_hook, so no 'completed' row ever appears for it; ai_run_log is append-only, so completion is
+  read as "does a matching 'completed' row exist for this invocation/function_name/model_name," not
+  as a mutation of the 'started' row itself. See complete_ai_run()'s own docstring for why this is
+  a second INSERT rather than an UPDATE.
 
   Which hook phase to use depends on what `relation`/`filter` actually reference, not on
   preference, because `this` means something different before vs. after the model's own
@@ -95,7 +99,7 @@
     {%- endif -%}
 
     insert into {{ ref('ai_run_log') }}
-        (invocation_id, model_name, function_name, row_count, est_tokens, est_cost, run_at, completed)
+        (invocation_id, model_name, function_name, row_count, est_tokens, est_cost, run_at, event)
     select
         '{{ invocation_id }}',
         {{ model_sql }},
@@ -106,7 +110,7 @@
         {{ cost_expr }},
         {#- cast to the column's type: Snowflake current_timestamp is TZ-aware but run_at is NTZ -#}
         cast({{ dbt.current_timestamp() }} as {{ dbt.type_timestamp() }}),
-        false
+        'started'
     from (select {{ sz_select }} from {{ rel }}
         {%- if filter is not none and filter | trim != '' %}
         where {{ filter }}

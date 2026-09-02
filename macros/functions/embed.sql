@@ -11,14 +11,25 @@
 {% macro embed(input_column, model=none) -%}
     {{ dbt_context_engineering.require_ai_functions_enabled('embed') }}
     {{ dbt_context_engineering.require_safe_materialization('embed') }}
+    {{ dbt_context_engineering.require_full_refresh_gate('embed') }}
     {{ return(adapter.dispatch('embed', 'dbt_context_engineering')(input_column, model)) }}
 {%- endmacro %}
 
 
 {% macro default__embed(input_column, model) -%}
-    {{ exceptions.raise_compiler_error(
-        "embed is not implemented for the '" ~ target.type ~ "' adapter. "
-        ~ "Supported: snowflake, databricks, bigquery.") }}
+    {#- Gated on execute for the same reason require_ai_functions_enabled is (see
+        require_prerequisites.sql): dbt's parse phase renders every model's Jinja to build the
+        manifest, regardless of --select, so an unguarded raise here breaks parsing of the whole
+        project the moment any one model anywhere on this adapter calls embed(), not just the
+        model that does. Unlike a side-effect-only check, this macro's return value is spliced
+        directly into the caller's own SELECT expression, so parse time still needs a
+        syntactically valid placeholder, not an empty string. -#}
+    {%- if execute -%}
+        {{ exceptions.raise_compiler_error(
+            "embed is not implemented for the '" ~ target.type ~ "' adapter. "
+            ~ "Supported: snowflake, databricks, bigquery.") }}
+    {%- endif -%}
+    {{ return('null') }}
 {%- endmacro %}
 
 

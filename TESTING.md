@@ -448,6 +448,66 @@ new AI spend), and remaps its real `utterance_id` values onto the same `t1`/`t2`
 ids the duckdb fixture uses, so `assert_kb_delta.sql` is byte-identical in both projects rather than
 diverging over fixture-specific identifiers.
 
+### 4.8 attach_metadata's null-metadata-value edge case
+
+`amd_null_meta_source` joins against `chunk_docs`' real partition keys rather than a hand-built
+chunks fixture: `doc_1` gets one row of real values (a baseline for contrast), `doc_2` gets TWO
+rows that both agree on null for every column, `doc_3` gets no row at all (the ordinary
+unmatched-`LEFT JOIN` case). `assert_amd_null_meta` proves a consistently-null value passes
+through cleanly rather than assuming it from `attach_metadata`'s DISTINCT-collapse docstring
+alone: `doc_2`'s two agreeing-null rows collapse to one (no fan-out, `chunk_id` stays unique),
+`content_hash` stays non-null even when every hashed input is null (already coalesced in the
+formula), and the `in_text=True` variant (`amd_null_meta_text`) renders an empty line for the
+null value (`"title: \n"`) rather than a literal `"None"`/`"null"` string, with the block still
+prepended at all.
+
+**The existing functional-dependency guard had a blind spot this surfaced.**
+`assert_metadata_source_fd` used to check `count(distinct col) > 1` per key, but
+`COUNT(DISTINCT col)` silently ignores `NULL`, so a key with one row at `col = 'x'` and another at
+`col = NULL` passed this guard undetected, exactly the shape `attach_metadata`'s real join would
+still correctly fan out on (a row-tuple `DISTINCT` has no such blind spot, `(key, NULL)` and
+`(key, 'x')` are different rows under `DISTINCT`, the same semantics the real join relies on). The
+guard now mirrors that row-tuple `DISTINCT` collapse directly instead of a per-column
+`count(distinct col)`, so it can't miss a null-vs-value conflict `attach_metadata` itself would
+catch.
+
+### 4.9 chunk()'s downstream embed() no-op across a pure fingerprint bump
+
+ADR-0029 reasoned from determinism that a `chunk_fn_fingerprint` bump (a config change, no
+content change) forces a full whole-partition rebuild but leaves `chunk_text` byte-identical, so
+a downstream content-hash delta should see nothing to re-embed. This fixture measures that
+directly instead of only reasoning about it.
+
+`chunk_fp_probe_units` carries `unit_id_alias`, a column holding the exact same values as
+`unit_id` under a different name. `chunk_fp_probe_chunks` passes `id_column=var('fp_probe_id_col',
+'unit_id')` to `chunk()`; swapping that var to `'unit_id_alias'` changes `chunk_fn_fingerprint`
+(`id_column` is hashed by name) without changing anything `chunk()` actually outputs, since the
+aliased column resolves to identical values.
+
+```bash
+dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+  --select chunk_fp_probe_units chunk_fp_probe_chunks chunk_fp_probe_chunks_hashed \
+  chunk_fp_probe_embed assert_chunk_fp_probe --full-refresh
+# ^ fp_probe_id_col defaults to 'unit_id': baseline, 2 chunks, embed row_count=2.
+dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+  --select chunk_fp_probe_chunks chunk_fp_probe_chunks_hashed chunk_fp_probe_embed \
+  assert_chunk_fp_probe --vars '{fp_probe_id_col: unit_id_alias}'
+# ^ fingerprint-only bump: embed row_count must be 0.
+```
+
+Confirmed directly (not just via the test, by inspecting the underlying table): `partition_hash`
+changed for both partitions between the two builds (`c9558cac...`→`0c660296...`,
+`bd8e8253...`→`64573ed1...`), proving `chunk()` genuinely treated both as dirty and did a real
+whole-partition replace. `chunk_id`/`chunk_text` stayed byte-identical across that replace, and
+`embedded_at` on the downstream `chunk_fp_probe_embed` row stayed frozen at its phase-1 value,
+direct proof no re-embedding happened, not an artifact of the row_count measurement alone.
+
+`chunk_fp_probe_embed`'s `embedding` is a fixed stand-in literal, not a real `embed()` call, the
+same precedent `content_hash_delta` uses on every tier: the mechanism under test is the
+delta/metering plumbing (does `log_ai_run`'s `row_count` correctly read zero when `chunk()`
+rebuilds a partition but `chunk_text` doesn't change), not `embed()`'s own AI behavior, so no AI
+spend or cloud warehouse is needed to verify it.
+
 ---
 
 ## 5. What to look out for in the results

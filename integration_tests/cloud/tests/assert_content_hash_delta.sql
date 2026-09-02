@@ -14,7 +14,20 @@ from {{ ref('ai_run_log') }}
 where invocation_id = '{{ invocation_id }}'
   and function_name = 'embed'
   and model_name = 'content-hash-delta-test'
-  and (row_count <> {{ expected_row_count }} or completed <> true)
+  and event = 'started'
+  and row_count <> {{ expected_row_count }}
+
+union all
+
+select 'missing_completed_row' as issue, null as row_count
+from (
+    select count(*) as n from {{ ref('ai_run_log') }}
+    where invocation_id = '{{ invocation_id }}'
+      and function_name = 'embed'
+      and model_name = 'content-hash-delta-test'
+      and event = 'completed'
+) c
+where c.n <> 1
 
 union all
 

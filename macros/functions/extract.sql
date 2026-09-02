@@ -7,6 +7,7 @@
 {% macro extract(input_column, prompt=none, output_schema=none, model=none) -%}
     {{ dbt_context_engineering.require_ai_functions_enabled('extract') }}
     {{ dbt_context_engineering.require_safe_materialization('extract') }}
+    {{ dbt_context_engineering.require_full_refresh_gate('extract') }}
     {%- if output_schema is none -%}
         {{ exceptions.raise_compiler_error("extract: output_schema is required (it is the extraction contract).") }}
     {%- endif -%}
@@ -17,9 +18,14 @@
 
 
 {% macro default__extract(input_column, prompt, output_schema, model) -%}
-    {{ exceptions.raise_compiler_error(
-        "extract is not implemented for the '" ~ target.type ~ "' adapter. "
-        ~ "Supported: snowflake, databricks, bigquery.") }}
+    {#- execute-gated, same reasoning as default__embed: this return value is spliced into the
+        caller's own SELECT, so parse time needs a valid placeholder, not an empty string. -#}
+    {%- if execute -%}
+        {{ exceptions.raise_compiler_error(
+            "extract is not implemented for the '" ~ target.type ~ "' adapter. "
+            ~ "Supported: snowflake, databricks, bigquery.") }}
+    {%- endif -%}
+    {{ return('null') }}
 {%- endmacro %}
 
 

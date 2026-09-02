@@ -19,8 +19,9 @@ models:
       - name: chunk_id
         tests:
           - relationships:
-              to: ref('orphan_chunks')
-              field: chunk_id
+              arguments:
+                to: ref('orphan_chunks')
+                field: chunk_id
 
   - name: chunk_metadata_cols
     description: "attach_metadata over chunk_docs (default in_text=False) — title/citation_url pass through as columns only."
@@ -41,6 +42,21 @@ models:
         tests: [not_null]
       - name: citation_url
         tests: [not_null]
+
+  - name: amd_null_meta_source
+    description: "Metadata edge-case fixture, joined against chunk_docs' real partition keys: doc_1 real values (baseline), doc_2 two rows both agreeing on null, doc_3 unmatched."
+
+  - name: amd_null_meta
+    description: "attach_metadata over chunk_docs joined against amd_null_meta_source (default in_text=False) — proves a consistently-null metadata value passes through cleanly, no fan-out."
+    columns:
+      - name: chunk_id
+        tests: [unique, not_null]
+
+  - name: amd_null_meta_text
+    description: "Same as amd_null_meta with in_text=True — proves a null value renders as an empty line in the prepended block, not a literal null/None string."
+    columns:
+      - name: chunk_id
+        tests: [unique, not_null]
 
   - name: chunk_metadata_utterances
     description: "attach_metadata over chunk_utterances (transcripts), same macro and call shape as the docs models, pointed at a structurally different source."
@@ -173,8 +189,9 @@ models:
       - name: chunk_id
         tests:
           - relationships:
-              to: ref('orphan_chunks')
-              field: chunk_id
+              arguments:
+                to: ref('orphan_chunks')
+                field: chunk_id
 
   - name: orphan_kb_source
     description: >
@@ -201,5 +218,6 @@ models:
       - name: source_key
         tests:
           - relationships:
-              to: ref('orphan_kb_valid_keys')
-              field: source_key
+              arguments:
+                to: ref('orphan_kb_valid_keys')
+                field: source_key

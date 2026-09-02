@@ -180,7 +180,7 @@ Semantic search is deliberately the simple route through. Behind it we mapped th
 | Governed retrieval | Ranks rows by cosine similarity to a query: exact, portable, no index required | `vector_search` | **Validated** |
 | Cross-source knowledge base | Unions sources into one shape, so a single search spans systems and cites origins | `knowledge_base` | **Validated** |
 | Groundedness & evaluation | Deterministic tests catching hallucinated quotes, off-taxonomy labels, and accuracy regressions | `grounded`, `conforms_to_schema`, `eval` | **Validated** |
-| Cost governance & audit | Stops oversized batches before they run, caps output spend, and logs what each run consumed | `guard_batch`, `log_ai_run`, `complete_ai_run`, `max_output_tokens` / `bq_thinking_budget` | **Built** (live cost reconciliation deferred) |
+| Cost governance & audit | Stops oversized batches before they run, gates spend behind an opt-in, caps output spend, and logs what each run consumed | `guard_batch`, `ai_functions_enabled`, `allow_full_reembed`, `dev_sample_filter`, `log_ai_run`, `complete_ai_run`, `max_output_tokens` / `bq_thinking_budget` | **Built** (live cost reconciliation deferred) |
 | Free-form generation | Produces summaries, rewrites, and open answers when no label or field set fits | `generate` | **Beta** |
 | Typed extraction | Pulls facts present in the text into typed fields, each with an evidence quote | `extract` | **Beta** |
 | Portable AI output | Reads a structured AI result back as a plain scalar, identically on every engine | `text`, `field` | **Beta** |
@@ -223,7 +223,7 @@ Every public object. All are called **package-qualified** (`dbt_context_engineer
 
 #### Chunking
 
-**`chunk(relation, id_column, order_column, text_column, partition_column=none, label_column=none, target_tokens=none, overlap_tokens=none, join_separator='\n')`**: packs ordered atomic *units* into token-bounded chunks that never split a unit or cross `partition_column`, carrying each unit's id into `source_rows` (lineage). Deterministic, no AI. Output: `chunk_id, partition_key, chunk_seq, source_rows, chunk_text, n_source_rows, token_estimate`.
+**`chunk(relation, id_column, order_column, text_column, partition_column=none, label_column=none, target_tokens=none, overlap_tokens=none, join_separator='\n')`**: packs ordered atomic *units* into token-bounded chunks that never split a unit or cross `partition_column`, carrying each unit's id into `source_rows` (lineage). Deterministic, no AI. Output: `chunk_id, partition_key, chunk_seq, source_rows, chunk_text, n_source_rows, token_estimate, exceeds_target, partition_hash`. Also supports `materialized='incremental'`, replacing whole partitions on `partition_key` (never `chunk_id`, since a re-chunk can renumber them); enforcement and per-engine requirements are in [ADR-0029](adr/0029-chunk-partition-level-incremental-and-data-shape-guarantees.md).
 
 **`split_sentences(relation, id_column, text_column)`**: splits one text row into one row per sentence (`sentence_id, document_id, sentence_index, sentence_text`) to feed `chunk`. Naive `[.!?]` boundaries, identical on all engines. For better splitting use a real tokenizer upstream.
 
@@ -249,17 +249,19 @@ Every public object. All are called **package-qualified** (`dbt_context_engineer
 
 **`estimate_tokens(text_expression)`**: a SQL expression estimating tokens (`ceil(len/4)`), no AI. Shared by the guard and the log.
 
-**`log_ai_run(function_name, model_name=none, relation=none, input_column=none, filter=none)`**: pre- or post-hook (see [ADR-0022](adr/0022-log-ai-run-hook-phase-follows-what-this-means.md) for which one); appends one usage/cost row to `ai_run_log` (`completed=false`). Creates `ai_run_log` itself the first time it fires against a target that lacks it.
+**`dev_sample_filter(row_limit=none)`**: a portable `qualify row_number() … <= n` clause that caps a model to a random `row_limit` rows (or `var('ai_sample_rows')` if unset). Append it to a model's final `select` while iterating, so nothing is metered or billed against the full corpus by accident.
 
-**`complete_ai_run(function_name, model_name=none)`**: always safe as a post-hook; flips the row `log_ai_run` inserted this invocation to `completed=true`, matched on `invocation_id`/`function_name`/`model_name`.
+**`log_ai_run(function_name, model_name=none, relation=none, input_column=none, filter=none)`**: pre- or post-hook (see [ADR-0022](adr/0022-log-ai-run-hook-phase-follows-what-this-means.md) for which one); appends a `'started'` row to `ai_run_log` with the batch's sizing (row count, estimated tokens/cost). Creates `ai_run_log` itself the first time it fires against a target that lacks it.
 
-**`ai_run_log`** *(model)*: the append-only incremental usage/cost log `log_ai_run` writes to.
+**`complete_ai_run(function_name, model_name=none)`**: always safe as a post-hook; appends a **separate** `'completed'` row (never an `UPDATE`) once the model finishes, matched back to its `'started'` row on `invocation_id`/`function_name`/`model_name`. Event-sourced rather than a boolean flip, so two concurrent runs never contend for the same row ([ADR-0031](adr/0031-run-completion-as-an-event-sourced-append.md)).
+
+**`ai_run_log`** *(model)*: the append-only, event-sourced usage/cost log `log_ai_run` / `complete_ai_run` write to. `event` is `'started'` or `'completed'`; sizing columns are null on a `'completed'` row.
 
 #### Incremental / versioning (embed)
 
 **`version_guard(pinned_version, version_column='model_version')`** → **bool**: `True` when an incremental model must **reprocess all rows** (first build, `--full-refresh`, stored version differs, or no `version_column` yet). Drive your delta `WHERE` with it and pair with a `unique_key`.
 
-**`incremental_delta_predicate(unique_key, version=none, version_column='model_version', content_hash_column=none)`** → the delta `WHERE` predicate (or `none` when the whole corpus reruns). One source of truth for the body's `where`, the guard's `filter`, and the log's `filter`. Pass `content_hash_column` to also catch a row whose key exists but whose *source text changed*.
+**`incremental_delta_predicate(unique_key, version=none, version_column='model_version', content_hash_column=none)`** → the delta `WHERE` predicate (or `none` when the whole corpus reruns). One source of truth for the body's `where`, the guard's `filter`, and the log's `filter`. Pass `content_hash_column` to also catch a row whose key exists but whose *source text changed*. Not `embed`-specific: the same predicate, bare or with `content_hash_column`, governs an incremental `classify` / `generate` / `extract` / `attach_metadata` / `knowledge_base` model exactly the same way.
 
 **`row_value_not_in(columns, relation)`** → dispatched row-value `NOT IN`; backs `incremental_delta_predicate`'s `content_hash_column`. Rarely called directly.
 
@@ -282,6 +284,8 @@ Every public object. All are called **package-qualified** (`dbt_context_engineer
 **`grounded`** *(generic test)*: attach in `schema.yml` to an evidence column; fails a row whose quote isn't a substring of `source_text_column`. Args: `source_text_column` (required), `ignore_case=true`, `normalize_whitespace=true`, `allow_empty=false`.
 
 **`conforms_to_schema(relation, column, schema_name, schema_version, property=none, allow_null=false)`**: a macro for a **singular test**: returns rows whose `column` value isn't in the schema enum. Point it at a flattened scalar (use `field` first).
+
+**`no_oversized_chunks`** *(generic test)*: attach in `schema.yml` to `chunk()`'s `exceeds_target` column; fails any row where it's `true`. Opt-in (a data-quality signal about the source corpus, not a package bug), the same way `grounded` is opt-in.
 
 ### Beta (required capabilities, in progress)
 
@@ -318,6 +322,7 @@ Part of the surface but rarely called directly as they isolate per-engine diverg
 | `bq_model_params(max_output_tokens, thinking_budget)` | BigQuery `model_params` JSON |
 | `str_literal(s)` | a portable, dispatched SQL string literal (newlines, quotes, backslashes handled per engine) |
 | `require_bq_model()` / `require_databricks_serverless()` | prerequisite checks (BigQuery advisory; Databricks deferred) |
+| `require_ai_functions_enabled(fn_name)` / `require_full_refresh_gate(fn_name)` | prerequisite checks wired into every AI function: the `ai_functions_enabled` spend gate and the `allow_full_reembed` full-refresh gate |
 
 ## The dispatch pattern
 
@@ -325,7 +330,7 @@ Every engine-specific macro uses `adapter.dispatch` with per-adapter impls (`__s
 
 ## Configuration
 
-All divergent prerequisites are `vars` (see `dbt_project.yml`), visible and documented, never inferred. Key vars: `model_generate` / `model_classify` / `model_extract` and `embedding_model` (per-function model names, always explicit); `chunk_target_tokens` / `chunk_overlap_tokens`; `max_batch_rows` / `max_est_tokens` (guard ceilings); `max_output_tokens` and `bq_thinking_budget` (output-side cost control; the latter BigQuery/Gemini-only, `0` disables billed "thinking"); `cost_per_1k_tokens` (for logged `est_cost`). BigQuery's `bq_connection` is **optional** (End-User Credentials cover interactive queries; the `AI.*` functions need no `CREATE MODEL`). The beta `embedding_canary` adds `embedding_canary_similarity_threshold` (default `0.999`), `embedding_canary_test_severity` (default `warn`), and, Snowflake only, `embedding_canary_vector_dimension` (required, no default); `monitoring: +enabled: true` turns it on.
+All divergent prerequisites are `vars` (see `dbt_project.yml`), visible and documented, never inferred. Key vars: `model_generate` / `model_classify` / `model_extract` and `embedding_model` (per-function model names, always explicit); `chunk_target_tokens` / `chunk_overlap_tokens`; `max_batch_rows` / `max_est_tokens` (guard ceilings); `ai_functions_enabled` (default `false`; every AI function raises unless it's `true` for the target); `allow_full_reembed` (no default; required on an AI-backed incremental model's own `full_refresh` config, so a bare `--full-refresh` can't silently re-bill the whole corpus); `ai_sample_rows` (caps a model to a random sample via `dev_sample_filter` while iterating); `max_output_tokens` and `bq_thinking_budget` (output-side cost control; the latter BigQuery/Gemini-only, `0` disables billed "thinking"); `cost_per_1k_tokens` (for logged `est_cost`). BigQuery's `bq_connection` is **optional** (End-User Credentials cover interactive queries; the `AI.*` functions need no `CREATE MODEL`). The beta `embedding_canary` adds `embedding_canary_similarity_threshold` (default `0.999`), `embedding_canary_test_severity` (default `warn`), and, Snowflake only, `embedding_canary_vector_dimension` (required, no default); `monitoring: +enabled: true` turns it on.
 
 ## Repo map
 
@@ -333,10 +338,10 @@ All divergent prerequisites are `vars` (see `dbt_project.yml`), visible and docu
 macros/
   functions/               # generate/classify/extract/embed (adapter.dispatch) + prereq checks
   prompts/                 # prompt / schema_def (macro-library loader, ADR-0001) + render_prompt
-  chunking/                # chunk (unit packing) + split_sentences (layer-1 splitter) + array_agg/string_agg
+  chunking/                # chunk (unit packing, incremental-aware) + split_sentences + no_oversized_chunks + array_agg/string_agg
   metadata/                # attach_metadata (join source-level metadata onto chunks)
-  cost/                    # guard_batch / estimate_tokens / log_ai_run / complete_ai_run
-  audit/                   # ai_run_log_columns_sql / ensure_ai_run_log_exists
+  cost/                    # guard_batch / estimate_tokens / dev_sample_filter / log_ai_run / complete_ai_run
+  audit/                   # ai_run_log_schema / create_ai_run_log_table
   incremental/             # version_guard / incremental_delta_predicate / row_value_not_in
   embedding/               # content_hash / embedding_dimension / embedding_fn_fingerprint / embedding_logic_hash
   retrieval/               # vector_search

@@ -14,7 +14,7 @@ select
     cast(null as {{ dbt.type_numeric() }})   as est_tokens,
     cast(null as {{ dbt.type_numeric() }})   as est_cost,
     cast(null as {{ dbt.type_timestamp() }}) as run_at,
-    cast(null as {{ dbt.type_boolean() }})   as completed
+    cast(null as {{ dbt.type_string() }})    as event
 -- from (select 1) gives the WHERE a FROM (BigQuery forbids WHERE without FROM); 0 rows, typed columns
 from (select 1) as _one
 where 1 = 0

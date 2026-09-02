@@ -75,6 +75,48 @@
     {%- endif -%}
     {%- set step = target_tokens - overlap_tokens -%}
 
+    {#- Enforces ADR-0029's Decision directly on the caller's own config, the same dispatch-layer
+        pattern as require_safe_materialization/require_full_refresh_gate (config.get() resolves
+        correctly from inside a macro regardless of call depth): a caller-supplied validation
+        helper only protects a caller who remembers to invoke it, so the check lives inside
+        chunk() itself, where every caller runs it unconditionally. Gated on execute for the
+        identical reason those two are: config.get() only resolves correctly once execute is
+        True, and an unguarded raise here would otherwise fire during manifest parsing for every
+        model calling chunk() project-wide, not just the ones actually selected. -#}
+    {%- if execute and config.get('materialized') == 'incremental' -%}
+        {%- if target.type == 'bigquery' -%}
+            {{ exceptions.raise_compiler_error(
+                "chunk: materialized='incremental' is not supported on BigQuery. merge, "
+                ~ "insert_overwrite, and microbatch all fail for this shape (see ADR-0029's "
+                ~ "Evidence: merge silently duplicates a row and leaves a vacated chunk "
+                ~ "undeleted; insert_overwrite with a STRING partition key silently produces an "
+                ~ "unpartitioned table then fails at run time). Use materialized='table' instead; "
+                ~ "chunk_text stays byte-identical for unchanged partitions, so no downstream AI "
+                ~ "spend follows a full rebuild.") }}
+        {%- endif -%}
+        {%- if config.get('unique_key') != 'partition_key' -%}
+            {{ exceptions.raise_compiler_error(
+                "chunk: materialized='incremental' requires unique_key='partition_key'. chunk_id "
+                ~ "is not a stable identity across a re-chunk, chunk_seq can be renumbered or "
+                ~ "dropped when a partition's units change, so merging on it silently duplicates "
+                ~ "or orphans rows. Got unique_key=" ~ (config.get('unique_key') | string) ~ ".") }}
+        {%- endif -%}
+        {%- set expected_strategy = 'insert_overwrite' if target.type == 'databricks' else 'delete+insert' -%}
+        {%- if config.get('incremental_strategy') != expected_strategy -%}
+            {{ exceptions.raise_compiler_error(
+                "chunk: materialized='incremental' on '" ~ target.type ~ "' requires "
+                ~ "incremental_strategy='" ~ expected_strategy ~ "'. Whole-partition replacement "
+                ~ "is mandatory, never a merge on chunk_id. Got incremental_strategy="
+                ~ (config.get('incremental_strategy') | string) ~ ".") }}
+        {%- endif -%}
+        {%- if target.type == 'databricks' and config.get('partition_by') is none -%}
+            {{ exceptions.raise_compiler_error(
+                "chunk: materialized='incremental' with incremental_strategy='insert_overwrite' "
+                ~ "on Databricks also requires partition_by (e.g. partition_by=['partition_key']), "
+                ~ "or insert_overwrite has nothing to scope replacement to.") }}
+        {%- endif -%}
+    {%- endif -%}
+
     {%- set str_t = dbt.type_string() -%}
     {%- set partition_select = partition_column if partition_column is not none else "cast(null as " ~ str_t ~ ")" -%}
     {#- Coalesce before assembly, not after. A null text (or null label) makes the whole

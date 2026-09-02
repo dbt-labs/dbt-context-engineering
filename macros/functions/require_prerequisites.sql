@@ -19,9 +19,10 @@
 
 {% macro require_databricks_serverless() -%}
     {#- Databricks AI functions need serverless / DBR 18.2+; not on classic/Pro warehouses.
-        Phase 0 stub: real runtime check lands when live creds exist. For now it documents
-        the requirement and is a no-op so compile passes. -#}
-    {#- TODO(Phase live-validation): query runtime and raise if classic/Pro. -#}
+        Phase 0 stub: real runtime check (query the warehouse/cluster and raise on classic/Pro)
+        lands when live creds exist to verify it against. For now it documents the requirement
+        and is a no-op so compile passes; see README.md's macro reference ("Databricks deferred")
+        and TESTING.md's `assert_wrappers_nonnull` note for the manual cross-check today. -#}
 {%- endmacro %}
 
 
@@ -71,6 +72,39 @@
             fn_name ~ "(): materialized='view' recomputes this call on every query against this "
             ~ "model, an unbounded, repeated cost, not a one-time cost per dbt run. Use 'table' "
             ~ "or 'incremental' instead."
+        ) }}
+    {%- endif -%}
+{%- endmacro %}
+
+
+{% macro require_full_refresh_gate(fn_name) -%}
+    {#- Only meaningful for materialized='incremental'. 'view' is already blocked by
+        require_safe_materialization; 'table' fully rebuilds on every plain `dbt run` regardless
+        of --full-refresh, so there is nothing extra for this flag to gate there.
+
+        dbt's OWN full_refresh config key, when a model sets it, overrides whether a bare
+        --full-refresh CLI flag does anything for that node (independent of this package
+        entirely). Left unset, config.get('full_refresh') resolves to Jinja `none`; once a model
+        sets it to anything, even `false`, it resolves to that real value instead. Confirmed live
+        via a throwaway probe model compiled both ways. This macro does not care WHICH value was
+        chosen, only that the model made a deliberate choice instead of leaving dbt's own default
+        (a bare --full-refresh always fully reprocesses) silently in force on an AI-calling model.
+
+        version_guard's own state-driven full reprocess (a real version/fingerprint bump) is
+        untouched by this: it fires on its own, independent of --full-refresh and this config key
+        entirely. This macro only closes the gap version_guard doesn't cover, an UNRELATED
+        --full-refresh on a shared job re-triggering AI spend on a model that didn't change.
+
+        Same injection point and execute-gating as require_ai_functions_enabled and
+        require_safe_materialization, for the identical reason: an unguarded raise here would
+        otherwise fire during manifest parsing for every model calling this function,
+        project-wide, not just the ones actually selected. -#}
+    {%- if execute and config.get('materialized') == 'incremental' and config.get('full_refresh') is none -%}
+        {{ exceptions.raise_compiler_error(
+            fn_name ~ "(): materialized='incremental' with no full_refresh config leaves this "
+            ~ "model's AI cost exposed to any bare --full-refresh, even one run for an unrelated "
+            ~ "reason on a shared job. Set full_refresh=var('allow_full_reembed', false) (or "
+            ~ "similar) so a reprocess requires an explicit opt-in."
         ) }}
     {%- endif -%}
 {%- endmacro %}

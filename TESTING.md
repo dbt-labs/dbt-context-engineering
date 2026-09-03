@@ -287,7 +287,226 @@ same `relationships_orphan_embeddings_chunk_id__chunk_id__ref_orphan_chunks_` te
 confirming the deliberate re-chunk step actually orphans rows and the relationships test actually
 catches it on each engine, not just duckdb.
 
-Rebuild both models together with matching vars afterward to leave the local database clean.
+`attach_metadata()` and `knowledge_base()` have the identical gap on their own keys: a `chunk_id`
+`attach_metadata()`'s `chunks_relation` stops producing, or a `source_key` a `knowledge_base()`
+source relation stops producing, is absent from the batch and so invisible to any delta comparison
+keyed on the current batch. `orphan_amd` and `orphan_kb` below extend the same relationships-test
+pattern to both, rather than an active, DELETE-based sweep, because a delete driven by *absence*
+cannot tell "this row was genuinely deleted upstream" from "one of the source relations came back
+empty because of a transient failure." A relationships test fails visibly in the second case; a
+sweep would delete every row from that source, silently, a worse outcome than the staleness it
+would fix.
+
+```bash
+dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+  --select orphan_chunks orphan_amd orphan_kb_source orphan_kb_valid_keys orphan_kb \
+  --full-refresh --vars '{oc_target_tokens: 20}'
+# simulate a re-chunk (orphan_amd's gap) and a source deleting a row (orphan_kb's gap)
+dbt run --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+  --select orphan_chunks --full-refresh --vars '{oc_target_tokens: 100}'
+dbt run --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+  --select orphan_kb_source orphan_kb_valid_keys --full-refresh --vars '{ok_include_k3: false}'
+dbt test --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+  --select relationships_orphan_amd_chunk_id__chunk_id__ref_orphan_chunks_ \
+           relationships_orphan_kb_source_key__source_key__ref_orphan_kb_valid_keys_
+# ^ expect both to FAIL. That is the point of this test.
+```
+
+`orphan_kb_valid_keys` exists only because `relationships` compares raw column values against
+another model's column, and `knowledge_base()`'s key (`source_type || '::' || source_id`) is
+synthesized, not a column any source relation carries on its own; this view re-derives it from
+`orphan_kb_source`'s current rows so there is something to point the test at.
+
+Mirrored on all three cloud targets against the same test names, confirming both the re-chunk and
+the source-deletion step actually orphan rows, and both relationships tests actually catch it, on
+every engine.
+
+Rebuild all five models together with matching vars afterward to leave the local database clean.
+
+### 4.5 The chunk partition-delta step
+
+`chunk()` computes a `partition_hash` over its input units and compares it against the stored value
+itself, rebuilding only the partitions whose content changed. Whether an untouched partition is
+genuinely *skipped*, and whether a partition that loses a chunk has that chunk *deleted*, only
+appears across sequential runs:
+
+```bash
+dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+  --select chunk_edge_units chunk_edges chunk_edges_labeled chunk_delta_units chunk_delta \
+           assert_chunk_edges assert_chunk_null_lineage assert_chunk_fingerprint assert_chunk_delta \
+  --full-refresh
+# ^ cd_phase defaults to 1: clean(2 units), grow(2), shrink(3 -> 2 chunks).
+dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+  --select chunk_delta_units chunk_delta assert_chunk_delta --vars '{cd_phase: 2}'
+# ^ grow gains a unit, shrink loses one (vacating a chunk), new appears, clean is untouched.
+```
+
+Phase 1 **requires** `--full-refresh`. Running it incrementally over a phase-2 table leaves the
+`new` partition behind: it is absent from the source, so it produces no rows, so no incremental
+strategy keyed on the partitions present in the incoming data ever deletes it. A partition deleted
+from source outlives its chunks until a full refresh. Reproduced on Snowflake and Databricks
+(5 rows, `new` surviving); BigQuery does not show it only because `chunk_delta` is a table there.
+
+`assert_chunk_delta`'s load-bearing branch is `orphan_chunk_survived_shrink`. Whole-partition
+replacement is required because a re-chunk can renumber or drop a partition's chunks, so `chunk_id`
+is not a stable identity to merge on. A `merge` on `partition_key` gets this silently wrong: it
+matches both stored `shrink` rows against the single incoming row and updates both, leaving a
+duplicate while reporting success. That is why BigQuery, whose only strategies are `merge`,
+`insert_overwrite` (which cannot partition on a `STRING` key) and `microbatch`, materializes
+`chunk_delta` as a table instead. `chunk()` is deterministic and zero-AI-cost, so a BigQuery full
+rebuild costs warehouse compute only, and a downstream `embed()` still skips re-embedding because
+`chunk_text` is byte-identical for unchanged partitions.
+
+The same two-build sequence runs on all three cloud targets with byte-identical model and test
+files (`--target snowflake/databricks/bigquery`), which is what makes the four-tier parity claim
+in ADR-0015 real here rather than nominal.
+
+`assert_chunk_fingerprint` needs no warehouse data and no second run: it compares
+`chunk_fn_fingerprint` across argument sets in Jinja and fails naming any argument the fingerprint
+ignores. Without that fingerprint folded into `partition_hash`, changing `target_tokens` alone
+leaves every input byte identical, so no partition looks dirty and the model serves output built
+under the previous configuration while reporting success.
+
+### 4.6 The attach_metadata content-hash delta step
+
+`attach_metadata` computes its own `content_hash` from `chunk_text` plus every `metadata_columns`
+value, and compares it against the stored value on `this`, the same idea as 4.5 but simpler:
+`attach_metadata` never invents or renumbers `chunk_id`, so a plain `merge` on `chunk_id` is safe on
+every engine, no per-adapter strategy needed. Whether a metadata-only edit (chunk text unchanged,
+a joined column changed) is actually caught only appears across sequential runs:
+
+```bash
+dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+  --select attach_metadata_delta_meta_stg attach_metadata_delta assert_attach_metadata_delta \
+  --full-refresh
+# ^ amd_edit_id defaults to 'none': the unedited baseline.
+dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+  --select attach_metadata_delta_meta_stg attach_metadata_delta assert_attach_metadata_delta \
+  --vars '{amd_edit_id: doc_2}'
+# ^ doc_2's title changes; chunk_docs' own chunk_text for doc_2 is untouched.
+```
+
+`content_hash` is computed inside `attach_metadata()` itself, from the same `metadata_columns` list
+already passed to it, so there is exactly one place this formula is written, not a second,
+caller-maintained copy that can silently drift out of sync. Two mutations were run and reverted to
+confirm the test is not vacuous: removing the delta filter entirely (every row rewritten every run)
+failed `untouched_chunk_was_rewritten`, and dropping `metadata_columns` from the hash formula (the
+exact shape of the original bug) failed `edited_chunk_not_rebuilt`, four failures each time.
+
+No config fingerprint is needed the way chunk's `chunk_fn_fingerprint` is. `in_text` and
+`metadata_columns` are not blind spots the way `target_tokens` was for chunk: both already flow
+into what gets hashed, `in_text` through `chunk_text` itself and `metadata_columns` through the
+values it lists. Confirmed directly: reordering `metadata_columns`, toggling `in_text`, and adding a
+third column each changed every row's hash relative to a baseline with none of the three affecting
+it back.
+
+The same two-build sequence runs on all three cloud targets with byte-identical model and test
+files.
+
+### 4.7 The knowledge_base per-arm delta step
+
+`knowledge_base` synthesizes `source_key` (`source_type || '::' || source_id`) and computes
+`content_hash` per source arm, inside its own CTEs, then filters each arm to new-or-changed rows
+before the union rather than wrapping the whole union in an outer filter. Whether a whole untouched
+source is genuinely skipped, not just correctly deduplicated after a full re-scan, only appears
+across sequential runs:
+
+```bash
+dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+  --select kb_delta_tickets_stg kb_delta_calls_stg kb_delta assert_kb_delta --full-refresh
+# ^ kbd_phase defaults to 1: tickets t1/t2, calls c1.
+dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+  --select kb_delta_tickets_stg kb_delta_calls_stg kb_delta assert_kb_delta --vars '{kbd_phase: 2}'
+# ^ t2's text is edited, t3 appears, t1 and the ENTIRE calls source (c1) are untouched.
+```
+
+The calls arm is the point of this fixture. An outer wrap-and-filter around the whole union would
+still be correct, no duplicate rows, but it would fully scan, cast, and union the calls source
+every run regardless, before an outer `WHERE` ever narrowed anything. Filtering inside each arm
+means an untouched source contributes nothing past its own delta check, which is the actual compute
+saving going incremental is supposed to buy here.
+
+Two mutations were run and reverted to confirm the test is not vacuous: removing the delta filter
+entirely (every row rewritten every run) failed `untouched_row_was_rewritten`, and dropping `text`
+from the hash formula (the same shape as the original caller-assembled bug this pattern replaces)
+failed `edited_row_not_rebuilt`, three failures each time.
+
+`content_hash` deliberately does not cover `embedding`. Casting a `VECTOR`/`ARRAY` is itself
+engine-specific (the same reason `knowledge_base`'s own `text`/`ts` casts exist and `embedding`
+does not get one), and hashing one would reintroduce that non-portability for a narrow benefit.
+Consequence, not oversight: a source row whose upstream embedding changes with its text held
+constant is not caught as dirty here on that basis alone. `account_key` IS covered: a row
+re-parented to a different account is a real content change, not something to leave frozen.
+
+Merge on `source_key` is safe on every engine, the same reasoning as `attach_metadata`:
+`knowledge_base` never invents or renumbers a key, every row maps 1:1 to exactly one upstream row.
+Confirmed directly on all four engines, no BigQuery carve-out needed, unlike `chunk`.
+
+The cloud fixture reuses `embeddings`' already-computed vectors rather than calling `embed()`
+again (verified present on all three targets before every build in this session, to confirm zero
+new AI spend), and remaps its real `utterance_id` values onto the same `t1`/`t2`/`t3`/`c1` synthetic
+ids the duckdb fixture uses, so `assert_kb_delta.sql` is byte-identical in both projects rather than
+diverging over fixture-specific identifiers.
+
+### 4.8 attach_metadata's null-metadata-value edge case
+
+`amd_null_meta_source` joins against `chunk_docs`' real partition keys rather than a hand-built
+chunks fixture: `doc_1` gets one row of real values (a baseline for contrast), `doc_2` gets TWO
+rows that both agree on null for every column, `doc_3` gets no row at all (the ordinary
+unmatched-`LEFT JOIN` case). `assert_amd_null_meta` proves a consistently-null value passes
+through cleanly rather than assuming it from `attach_metadata`'s DISTINCT-collapse docstring
+alone: `doc_2`'s two agreeing-null rows collapse to one (no fan-out, `chunk_id` stays unique),
+`content_hash` stays non-null even when every hashed input is null (already coalesced in the
+formula), and the `in_text=True` variant (`amd_null_meta_text`) renders an empty line for the
+null value (`"title: \n"`) rather than a literal `"None"`/`"null"` string, with the block still
+prepended at all.
+
+**The existing functional-dependency guard had a blind spot this surfaced.**
+`assert_metadata_source_fd` used to check `count(distinct col) > 1` per key, but
+`COUNT(DISTINCT col)` silently ignores `NULL`, so a key with one row at `col = 'x'` and another at
+`col = NULL` passed this guard undetected, exactly the shape `attach_metadata`'s real join would
+still correctly fan out on (a row-tuple `DISTINCT` has no such blind spot, `(key, NULL)` and
+`(key, 'x')` are different rows under `DISTINCT`, the same semantics the real join relies on). The
+guard now mirrors that row-tuple `DISTINCT` collapse directly instead of a per-column
+`count(distinct col)`, so it can't miss a null-vs-value conflict `attach_metadata` itself would
+catch.
+
+### 4.9 chunk()'s downstream embed() no-op across a pure fingerprint bump
+
+ADR-0029 reasoned from determinism that a `chunk_fn_fingerprint` bump (a config change, no
+content change) forces a full whole-partition rebuild but leaves `chunk_text` byte-identical, so
+a downstream content-hash delta should see nothing to re-embed. This fixture measures that
+directly instead of only reasoning about it.
+
+`chunk_fp_probe_units` carries `unit_id_alias`, a column holding the exact same values as
+`unit_id` under a different name. `chunk_fp_probe_chunks` passes `id_column=var('fp_probe_id_col',
+'unit_id')` to `chunk()`; swapping that var to `'unit_id_alias'` changes `chunk_fn_fingerprint`
+(`id_column` is hashed by name) without changing anything `chunk()` actually outputs, since the
+aliased column resolves to identical values.
+
+```bash
+dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+  --select chunk_fp_probe_units chunk_fp_probe_chunks chunk_fp_probe_chunks_hashed \
+  chunk_fp_probe_embed assert_chunk_fp_probe --full-refresh
+# ^ fp_probe_id_col defaults to 'unit_id': baseline, 2 chunks, embed row_count=2.
+dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+  --select chunk_fp_probe_chunks chunk_fp_probe_chunks_hashed chunk_fp_probe_embed \
+  assert_chunk_fp_probe --vars '{fp_probe_id_col: unit_id_alias}'
+# ^ fingerprint-only bump: embed row_count must be 0.
+```
+
+Confirmed directly (not just via the test, by inspecting the underlying table): `partition_hash`
+changed for both partitions between the two builds (`c9558cac...`→`0c660296...`,
+`bd8e8253...`→`64573ed1...`), proving `chunk()` genuinely treated both as dirty and did a real
+whole-partition replace. `chunk_id`/`chunk_text` stayed byte-identical across that replace, and
+`embedded_at` on the downstream `chunk_fp_probe_embed` row stayed frozen at its phase-1 value,
+direct proof no re-embedding happened, not an artifact of the row_count measurement alone.
+
+`chunk_fp_probe_embed`'s `embedding` is a fixed stand-in literal, not a real `embed()` call, the
+same precedent `content_hash_delta` uses on every tier: the mechanism under test is the
+delta/metering plumbing (does `log_ai_run`'s `row_count` correctly read zero when `chunk()`
+rebuilds a partition but `chunk_text` doesn't change), not `embed()`'s own AI behavior, so no AI
+spend or cloud warehouse is needed to verify it.
 
 ---
 

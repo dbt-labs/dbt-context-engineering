@@ -42,7 +42,36 @@
                            stays in passthrough columns only (no duplication into the embedded
                            text, no token cost).
 
-  Returns a SELECT usable as a model body: every chunk output column, plus metadata_columns.
+  Returns a SELECT usable as a model body: every chunk output column, plus metadata_columns,
+  plus content_hash.
+
+  content_hash is always emitted, a hash of chunk_text plus every metadata_columns value in
+  list order. Macro-owned: attach_metadata computes it from the same metadata_columns list it
+  already has, instead of the caller restating that list a second time in a hand-written hash
+  formula. A caller-maintained copy of the same list can drift out of sync silently: a column
+  added to metadata_columns but not to the caller's own hash formula is a coverage gap, not a
+  compiler error.
+
+  When materialized='incremental', attach_metadata compares its own freshly computed
+  content_hash against the stored value on `this` and emits only chunk_ids that are new or
+  whose hash changed, via incremental_delta_predicate('chunk_id', content_hash_column=
+  'content_hash'). version is intentionally omitted from that call: attach_metadata is
+  zero-AI-cost, plain SQL with no model-version axis to bump, so version_guard has nothing to
+  gate here, and reprocess-all is driven purely by is_incremental() (first build /
+  --full-refresh).
+
+  Safe to merge on chunk_id, unlike chunk() itself: attach_metadata never invents or renumbers
+  chunk_id, it only joins metadata onto rows chunks_relation already produced, so a chunk_id
+  attach_metadata receives matches at most one stored row. No config fingerprint is needed the
+  way chunk() needed one: in_text and metadata_columns are not config attach_metadata's own
+  content_hash formula is blind to, they change what chunk_text or the metadata values
+  themselves resolve to, and both already flow into the hash. If chunks_relation stops producing
+  a chunk_id (a re-chunk), the corresponding attach_metadata row is orphaned: absent from the
+  batch, so invisible to incremental_delta_predicate, the same gap chunk() has. Not fixed with
+  deletion logic: a delete driven by absence can't tell "genuinely gone upstream" from "source
+  came back empty due to a transient failure," and the latter would wipe real rows. Surfaced
+  instead with a relationships test between this model and chunks_relation's current output, see
+  orphan_amd/orphan_chunks in TESTING.md 4.4.
 -#}
 
 {% macro attach_metadata(chunks_relation, metadata_relation, metadata_key_column,
@@ -62,6 +91,12 @@
         ) -%}
     {%- endfor -%}
     {%- set md_prefix_expr = (md_lines | join(' || ')) ~ " || '---' || chr(10)" -%}
+
+    {%- set hash_parts = ["coalesce(cast(chunk_text as " ~ str_t ~ "), '')"] -%}
+    {%- for mc in metadata_columns -%}
+        {%- do hash_parts.append("coalesce(cast(" ~ mc ~ " as " ~ str_t ~ "), '')") -%}
+    {%- endfor -%}
+    {%- set hash_input_expr = hash_parts | join(" || '|' || ") -%}
 
 {#- Collapse metadata_relation to one row per key with DISTINCT, not an aggregate. When each
     column is functionally dependent on the key (the contract), the rows are identical and DISTINCT
@@ -98,6 +133,17 @@ _ce_joined as (
     from {{ chunks_relation }} c
     left join _ce_metadata meta
         on cast(c.partition_key as {{ str_t }}) = cast(meta._meta_key as {{ str_t }})
+),
+
+{#- content_hash read from _ce_joined's own real chunk_text column, not a same-SELECT alias
+    (the BigQuery trap noted above). Covers chunk_text (already reflecting in_text) plus every
+    metadata_columns value in list order, so a change on either side is caught, and there is
+    exactly one place this formula is written: here, not restated by a caller. -#}
+_ce_hashed as (
+    select
+        *,
+        {{ dbt_context_engineering.content_hash(hash_input_expr) }} as content_hash
+    from _ce_joined
 )
 
 select
@@ -111,7 +157,12 @@ select
     {%- for mc in metadata_columns %}
     , {{ mc }}
     {%- endfor %}
-from _ce_joined
+    , content_hash
+from _ce_hashed
+{%- set delta = dbt_context_engineering.incremental_delta_predicate('chunk_id', content_hash_column='content_hash') %}
+{%- if delta %}
+where {{ delta }}
+{%- endif %}
 order by partition_key, chunk_seq
 
 {%- endmacro %}

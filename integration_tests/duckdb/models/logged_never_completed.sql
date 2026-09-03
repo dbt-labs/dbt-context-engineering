@@ -4,7 +4,7 @@
 ) }}
 
 {#- Deliberately logs WITHOUT a paired complete_ai_run, standing in for a model that errors after
-    its log_ai_run hook fires but before it would reach a completion hook. Its row stays
-    completed=false. assert_never_completed_stays_false checks that every row for this
-    function_name, from any invocation, stays completed=false. -#}
+    its log_ai_run hook fires but before it would reach a completion hook. Its 'started' row never
+    gets a matching 'completed' row. assert_never_completed_stays_false checks that no 'completed'
+    row for this function_name ever appears, from any invocation. -#}
 select count(*) as processed from {{ ref('fixture_utterances') }}

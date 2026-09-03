@@ -12,6 +12,9 @@
 -#}
 
 {% macro generate(input_column, prompt, output_schema=none, model=none) -%}
+    {{ dbt_context_engineering.require_ai_functions_enabled('generate') }}
+    {{ dbt_context_engineering.require_safe_materialization('generate') }}
+    {{ dbt_context_engineering.require_full_refresh_gate('generate') }}
     {{ return(adapter.dispatch('generate', 'dbt_context_engineering')(
         input_column, prompt, output_schema, model
     )) }}
@@ -19,9 +22,14 @@
 
 
 {% macro default__generate(input_column, prompt, output_schema, model) -%}
-    {{ exceptions.raise_compiler_error(
-        "generate is not implemented for the '" ~ target.type ~ "' adapter. "
-        ~ "Supported: snowflake, databricks, bigquery.") }}
+    {#- execute-gated, same reasoning as default__embed: this return value is spliced into the
+        caller's own SELECT, so parse time needs a valid placeholder, not an empty string. -#}
+    {%- if execute -%}
+        {{ exceptions.raise_compiler_error(
+            "generate is not implemented for the '" ~ target.type ~ "' adapter. "
+            ~ "Supported: snowflake, databricks, bigquery.") }}
+    {%- endif -%}
+    {{ return('null') }}
 {%- endmacro %}
 
 

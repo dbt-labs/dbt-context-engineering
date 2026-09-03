@@ -353,3 +353,5 @@ seeds/                     # synthetic fixtures (no real customer data)
 integration_tests/         # per-adapter (cloud) projects + duckdb/ (credential-free deterministic tests)
 ci/                        # structure-only CI profiles (placeholder creds) + verify_embedding_logic_hash.py
 ```
+
+NOTE: This project is provided as-is, without SLAs.

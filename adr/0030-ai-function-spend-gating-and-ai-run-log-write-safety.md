@@ -96,9 +96,7 @@ matches how `is_incremental()` already avoids acting at parse time.
 **A package cannot gate itself the way a package of selectable models can.**
 `generate`/`classify`/`embed`/etc. are macros invoked from inside a consumer's own arbitrary
 model files, not standalone models, so a per-model `+enabled`/materialization gate under
-`models:` does not apply here. A package's hooks are not inherited by projects that install it,
-either: declaring `on-run-start`/`on-run-end` in this package's own `dbt_project.yml` has no
-effect on a consuming project. Only that project's own hooks run.
+`models:` does not apply here.
 
 ## Decision
 
@@ -184,8 +182,26 @@ billed call. This check is about efficiency: skipping a bootstrap that a project
 enables AI functions never needed in the first place. It is not a second safety mechanism, and
 removing it would still be correct, only wasteful on a purely structural run.
 
-**Why this cannot ship as a hook inside the package's own `dbt_project.yml`.** A package's hooks
-are not inherited by projects that depend on it; only the consuming project's own hooks run.
+**Why this does not ship as a hook inside the package's own `dbt_project.yml`, even though dbt
+would run it.** dbt's `HookParser` parses `on-run-start`/`on-run-end` from every installed
+project's `dbt_project.yml`, not only the root project's, and the run task executes every
+resulting hook node found in the manifest, root project first. A package's own hook is not
+blocked by dbt; it runs like any hook the consumer wrote themselves, at the correct point in
+the run, unless the consumer disables the whole package (this package's own integration test
+project does exactly that, via `dbt_context_engineering: +enabled: false` at the top of its
+`models:` block, which also disables the package's hook node since the node's FQN falls under
+the same package namespace).
+
+This package still does not use that path, for two reasons that have nothing to do with
+whether dbt allows it. First, the failure mode a consumer gets with no wiring at all is already
+acceptable: the engine's own "table does not exist" error, naming `ai_run_log` directly, the
+same error "Why the missing-table case gets no custom error message" above already treats as
+sufficient. `create_ai_run_log_table()` exists to make a known, common hiccup easy to resolve,
+not to close a gap that would otherwise be unsafe. Second, a package-level hook runs on every
+`run`/`build`/`test`/`seed` invocation, for every consumer, whether or not that invocation
+touches AI functions at all, and it appears nowhere in the consumer's own `dbt_project.yml`.
+That is more implicit than the wiring it would replace, not less, and cuts against the same
+explicit-over-implicit reasoning the rest of this record relies on elsewhere.
 
 ## Consequences
 
@@ -232,6 +248,11 @@ are not inherited by projects that depend on it; only the consuming project's ow
   `config(materialized=validated_materialization(...))`). Rejected. It only fires if a model
   author routes their value through it; writing the value directly bypasses it entirely, and
   skipping it is the easier path, not a deliberate one.
+- **Auto-wiring `create_ai_run_log_table()` into this package's own `on-run-start`/`on-run-end`.**
+  Rejected. Not because dbt would ignore it (it would not; see Reasoning), but because the
+  missing-table error a consumer gets without it is already clear and expected, and because a
+  hook the consumer never wrote and cannot see in their own project, running on every invocation
+  whether or not it touches AI functions, is more implicit than the wiring it would replace.
 - **A custom, friendlier error when `ai_run_log` is missing.** Rejected. The engine's own error
   already names the table precisely on every engine; a wrapper adds a runtime metadata check for
   marginal benefit over what already exists.

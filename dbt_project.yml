@@ -111,3 +111,8 @@ models:
 seeds:
   dbt_context_engineering:
     +quote_columns: false
+    # embedding_canary_baseline is the only seed this package ships (integration-test fixtures
+    # live in integration_tests/*/seeds, not here). Disabled by default so a consumer's `dbt
+    # build`/`dbt seed` never writes it unless they've opted into monitoring — pair with
+    # `monitoring: +enabled: true` above.
+    +enabled: false

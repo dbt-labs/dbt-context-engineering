@@ -41,3 +41,9 @@ models:
       +enabled: true
     monitoring:
       +enabled: true
+
+seeds:
+  # embedding_canary_baseline ships disabled by default (see root dbt_project.yml) so a
+  # consumer's dbt build doesn't seed it unopted; re-enable here since cloud exercises monitoring.
+  dbt_context_engineering:
+    +enabled: true

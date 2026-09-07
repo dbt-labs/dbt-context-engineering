@@ -195,7 +195,7 @@ These are not extras or afterthoughts. They are capabilities we know context eng
 - **`generate`** / **`extract`**: the other two row-level AI operations. `generate` is free-form generation (plain text or a structured object); `extract` pulls a typed record of fields present in the text. `classify` (the precision unlock above) covers the closed-set-label case; reach for these when you need free text or a multi-field typed extraction. See [ADR-0010](adr/0010-four-ai-operations.md). Read structured results back portably with `text()` / `field()` ([ADR-0008](adr/0008-normalizing-ai-output.md)).
 - **`ai_agg`**: group-level aggregation (summarize a whole transcript, roll up sentiment across an account). Cross-adapter behavior diverges the most here; pair with `guard_agg_batch` on Databricks. See [ADR-0028](adr/0028-add-ai-agg-group-level-aggregation.md).
 - **`create_vector_index`**: opt-in, `dbt run-operation` **only** (never a model). Builds the engine's external, separately-billed index/service (Snowflake Cortex Search, BigQuery vector index; Databricks via its Vector Search API) for scale beyond the brute-force default. Stateful, with idle-serving cost, so drop it explicitly. See [ADR-0005](adr/0005-retrieval-brute-force-default-index-opt-in.md).
-- **`embedding_canary`**: runtime drift monitor. Re-embeds a small fixed probe set and compares it against a blessed baseline by cosine similarity, catching a provider silently changing a pinned model's behavior. **Disabled by default** (`monitoring: +enabled: false`); it makes real `embed()` calls, so add it only to a scheduled production job. See [ADR-0026](adr/0026-embedding-canary-runtime-drift-monitor.md).
+- **`embedding_canary`**: runtime drift monitor. Re-embeds a small fixed probe set and compares it against a blessed baseline by cosine similarity, catching a provider silently changing a pinned model's behavior. **Disabled by default** (`monitoring: +enabled: false`); it makes real `embed()` calls, so add it only to a scheduled production job. Its baseline seed ships disabled the same way, so turning the monitor on also means setting `seeds: dbt_context_engineering: +enabled: true`, or `dbt build`/`dbt seed` won't have the baseline to compare against. See [ADR-0026](adr/0026-embedding-canary-runtime-drift-monitor.md).
 
 ---
 
@@ -349,8 +349,8 @@ macros/
   evaluation/              # grounded / conforms_to_schema / eval (+ contains/collapse_ws/norm_text/schema_enum)
 models/audit/              # ai_run_log (append-only usage/cost log)
 prompts/                   # prompt+schema library, one Jinja macro per name+version (ADR-0001)
-seeds/                     # synthetic fixtures (no real customer data)
-integration_tests/         # per-adapter (cloud) projects + duckdb/ (credential-free deterministic tests)
+seeds/                     # embedding_canary_baseline only, disabled by default (see monitoring above)
+integration_tests/         # per-adapter (cloud) projects + duckdb/ (credential-free deterministic tests); each carries its own seeds/ of synthetic fixtures, not shipped to consumers
 ci/                        # structure-only CI profiles (placeholder creds) + verify_embedding_logic_hash.py
 ```
 

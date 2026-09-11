@@ -9,6 +9,12 @@
   whose structured output can't carry an enum (BigQuery), the wrappers auto-inject the allowed
   values into the prompt via augment_prompt, so the model is constrained everywhere from a single
   source of truth (see ADR-0009, structured-output divergence).
+
+  Defined locally in this project (not the package): dbt Fusion cannot resolve a package's own
+  prompt/schema macros from a consuming project (context.get() and the package's own namespace
+  self-reference both come up empty when the target macro lives in the same package as prompt()/
+  schema_def() themselves). A locally-defined prompt resolves fine on both dbt-core and Fusion, so
+  the integration tests exercise that path here rather than the package-shipped one.
 -#}
 
 {% macro prompt__EXAMPLE_signal_classify__v3() -%}

@@ -52,14 +52,20 @@ before review.
 
 ## Development setup
 
-You'll need Python, dbt (`>=1.6.0, <2.0.0`), and the adapter(s) you want to work
-against.
+You'll need dbt (`>=1.11.0, <3.0.0`) and the adapter(s) you want to work
+against. Install path depends on which engine you're running:
+
+- **dbt-core (1.x)** requires Python:
+  ```bash
+  pip install dbt-core dbt-snowflake dbt-databricks dbt-bigquery dbt-duckdb
+  ```
+- **dbt Fusion (2.x)** installs as a standalone binary — no Python required.
+  See [dbt's install docs](https://docs.getdbt.com/docs/local/install-dbt) for
+  the current install command.
+
+Either way, then install the package's own dependencies:
 
 ```bash
-# Install dbt and adapters (pick what you need)
-pip install dbt-core dbt-snowflake dbt-databricks dbt-bigquery dbt-duckdb
-
-# Install package dependencies
 dbt deps
 ```
 

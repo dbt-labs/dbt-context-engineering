@@ -5,7 +5,7 @@ config-version: 2
 # A cross-platform dbt package for context engineering — modeling data that AI agents
 # read — across Snowflake (Cortex), Databricks, and BigQuery.
 
-require-dbt-version: [">=1.6.0", "<2.0.0"]
+require-dbt-version: [">=1.11.0", "<3.0.0"]
 
 profile: 'dbt_context_engineering'
 

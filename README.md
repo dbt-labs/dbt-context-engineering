@@ -128,8 +128,8 @@ The quarterly business reviews that actually document the root cause never made 
 select
     chunk_id,
     {{ dbt_context_engineering.classify('chunk_text',
-        dbt_context_engineering.prompt('EXAMPLE_signal_classify', 'v3'),
-        dbt_context_engineering.schema_def('EXAMPLE_signal_classify', 'v3')) }} as classification
+        dbt_context_engineering.prompt('signal_classify', 'v3'),
+        dbt_context_engineering.schema_def('signal_classify', 'v3')) }} as classification
 from {{ ref('stg_chunks') }}
 ```
 
@@ -348,7 +348,6 @@ macros/
   operations/              # create_vector_index (run-operation only)
   evaluation/              # grounded / conforms_to_schema / eval (+ contains/collapse_ws/norm_text/schema_enum)
 models/audit/              # ai_run_log (append-only usage/cost log)
-prompts/                   # prompt+schema library, one Jinja macro per name+version (ADR-0001)
 seeds/                     # embedding_canary_baseline only, disabled by default (see monitoring above)
 integration_tests/         # per-adapter (cloud) projects + duckdb/ (credential-free deterministic tests); each carries its own seeds/ of synthetic fixtures, not shipped to consumers
 ci/                        # structure-only CI profiles (placeholder creds) + verify_embedding_logic_hash.py

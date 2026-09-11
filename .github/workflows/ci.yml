@@ -121,6 +121,89 @@ jobs:
           dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
             --select vg_adopt assert_vg_adopt --vars '{vg_legacy: false, vg_ver: v1}'
 
+  # Floor gate (ADR-0032): require-dbt-version's floor is >=1.11.0. `structure` and
+  # `deterministic-tests` above install dbt unpinned, so they only ever validate latest, never the
+  # declared floor itself — a future syntax bump could silently raise the true floor with nothing to
+  # catch it. Same shape as `structure`, pinned to exactly dbt-core 1.11.0.
+  floor-structure:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        adapter: [snowflake, databricks, bigquery]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dbt-core==1.11.0 (the declared floor) for ${{ matrix.adapter }}
+        run: pip install "dbt-core==1.11.0" "dbt-${{ matrix.adapter }}"
+      - name: deps
+        run: dbt deps --project-dir integration_tests/cloud --profiles-dir ci
+      - name: parse at the floor version (renders wrapper dispatch; no warehouse connection)
+        run: dbt parse --project-dir integration_tests/cloud --profiles-dir ci --target ${{ matrix.adapter }}
+
+  # Floor gate (ADR-0032), duckdb side. Same shape as `deterministic-tests`, pinned to exactly
+  # dbt-core 1.11.0 instead of latest.
+  floor-deterministic-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dbt-core==1.11.0 (the declared floor) + dbt-duckdb
+        run: pip install "dbt-core==1.11.0" dbt-duckdb
+      - name: deps
+        run: dbt deps --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb
+      - name: build + test at the floor version (duckdb)
+        run: |
+          mkdir -p target
+          dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb
+
+  # Fusion gate (ADR-0032): require-dbt-version's ceiling now includes dbt Fusion (v2.x). Nothing
+  # else in this file exercises Fusion at all, so without this job the Fusion-support claim is only
+  # as good as a one-time manual validation, not something CI keeps honest. Same shape as
+  # `structure`: parse only, placeholder creds, no warehouse connection.
+  fusion-structure:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        adapter: [snowflake, databricks, bigquery]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dbt Fusion
+        run: python -m pip install --pre dbt
+      - name: deps
+        run: dbt deps --project-dir integration_tests/cloud --profiles-dir ci
+      - name: parse (renders wrapper dispatch; no warehouse connection)
+        run: dbt parse --project-dir integration_tests/cloud --profiles-dir ci --target ${{ matrix.adapter }}
+
+  # Fusion gate (ADR-0032), duckdb side. Same shape as `deterministic-tests`, on Fusion. Excludes
+  # embedding_canary_baseline and its dependent test: Fusion's duckdb adapter cannot load a
+  # package-owned seed (dbt-core#16128 / dbt-context-engineering#18), a confirmed upstream engine
+  # bug, not a regression in this package's code. Remove the --exclude once that's fixed upstream.
+  fusion-deterministic-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dbt Fusion
+        run: python -m pip install --pre dbt
+      - name: deps
+        run: dbt deps --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb
+      - name: build + test (duckdb, Fusion)
+        run: |
+          mkdir -p target
+          dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+            --exclude embedding_canary_baseline assert_embedding_canary_matches_baseline
+
   # Live battery — OPT-IN (manual `workflow_dispatch` only; never runs on PR/push). Runs the full
   # integration battery against real warehouses for all three targets of the single cloud project.
   # Requires a repo secret DBT_PROFILES_YML holding the merged profile (dbt-context-engineering)

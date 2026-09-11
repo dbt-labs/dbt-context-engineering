@@ -15,7 +15,7 @@ just record the choice.
 | ADR | Title | Status |
 |---|---|---|
 | [0000](0000-record-architecture-decisions.md) | Record architecture decisions | Accepted |
-| [0001](0001-prompts-and-schemas-as-versioned-macros.md) | Prompts and schemas as versioned Jinja macros | Accepted |
+| [0001](0001-prompts-and-schemas-as-versioned-macros.md) | Prompts and schemas as versioned Jinja macros | Superseded by 0032 (partial) |
 | [0002](0002-chunking-as-token-bounded-unit-packing.md) | Chunking as token-bounded unit packing | Accepted |
 | [0003](0003-cost-as-a-first-class-output.md) | Cost as a first-class output: guard + run log | Accepted |
 | [0004](0004-version-aware-incremental-refresh.md) | Version-aware incremental refresh, no custom materialization | Accepted |
@@ -43,6 +43,7 @@ just record the choice.
 | [0026](0026-embedding-canary-runtime-drift-monitor.md) | `embedding_canary`: a runtime drift monitor, complementing `embedding_logic_hash` | Accepted |
 | [0027](0027-classification-as-a-second-privileged-knowledge-base-column.md) | Classification as a second privileged knowledge_base column | Accepted |
 | [0028](0028-add-ai-agg-group-level-aggregation.md) | Add `ai_agg`: a fifth operation for group-level LLM aggregation | Accepted |
+| [0032](0032-dbt-version-floor-and-fusion-support.md) | Raising the dbt version floor and declaring Fusion support | Accepted |
 
 ## New here? A reading path
 

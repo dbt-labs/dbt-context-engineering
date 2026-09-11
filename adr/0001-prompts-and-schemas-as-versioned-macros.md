@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted, 2026-07-30.
+Superseded by [ADR-0032](0032-dbt-version-floor-and-fusion-support.md), 2026-09-10, on the
+resolver's cross-package fallback only. Everything else below (prompts as versioned macros, the
+`prompt`/`schema_def` API shape, versioning discipline) still stands.
 
 ## Concept
 

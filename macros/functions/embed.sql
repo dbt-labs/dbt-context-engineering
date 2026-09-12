@@ -35,7 +35,10 @@
 
 {% macro snowflake__embed(input_column, model) -%}
     {%- set model = model or var('embedding_model', none) -%}
-    {%- if model is none -%}{{ exceptions.raise_compiler_error("embed: set var embedding_model or pass model=.") }}{%- endif -%}
+    {#- execute-gated, same reasoning as default__embed above: an unguarded raise here breaks
+        parsing of the whole project the moment any model anywhere calls embed() without a model
+        var set, not just the model that does. -#}
+    {%- if model is none -%}{%- if execute -%}{{ exceptions.raise_compiler_error("embed: set var embedding_model or pass model=.") }}{%- else -%}{%- set model = 'unset' -%}{%- endif -%}{%- endif -%}
     ai_embed('{{ model }}', {{ input_column }})
 {%- endmacro %}
 
@@ -43,7 +46,8 @@
 {% macro databricks__embed(input_column, model) -%}
     {{ dbt_context_engineering.require_databricks_serverless() }}
     {%- set model = model or var('embedding_model', none) -%}
-    {%- if model is none -%}{{ exceptions.raise_compiler_error("embed: set var embedding_model to an embedding serving endpoint, or pass model=.") }}{%- endif -%}
+    {#- execute-gated; see snowflake__embed above. -#}
+    {%- if model is none -%}{%- if execute -%}{{ exceptions.raise_compiler_error("embed: set var embedding_model to an embedding serving endpoint, or pass model=.") }}{%- else -%}{%- set model = 'unset' -%}{%- endif -%}{%- endif -%}
     {#- ai_query returns ARRAY<DOUBLE>; vector_cosine_similarity requires ARRAY<FLOAT>. Cast so the
         stored column and query vector are both FLOAT (confirmed live 2026-07-17). -#}
     cast(ai_query('{{ model }}', {{ input_column }}) as array<float>)
@@ -52,7 +56,8 @@
 
 {% macro bigquery__embed(input_column, model) -%}
     {%- set model = model or var('embedding_model', none) -%}
-    {%- if model is none -%}{{ exceptions.raise_compiler_error("embed: set var embedding_model (e.g. 'text-embedding-005') or pass model=.") }}{%- endif -%}
+    {#- execute-gated; see snowflake__embed above. -#}
+    {%- if model is none -%}{%- if execute -%}{{ exceptions.raise_compiler_error("embed: set var embedding_model (e.g. 'text-embedding-005') or pass model=.") }}{%- else -%}{%- set model = 'unset' -%}{%- endif -%}{%- endif -%}
     {#- AI.EMBED returns STRUCT<result ARRAY<FLOAT64>, ...>; .result is the bare vector. -#}
     (AI.EMBED(
         content => {{ input_column }},

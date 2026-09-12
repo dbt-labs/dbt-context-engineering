@@ -60,7 +60,10 @@
 {% macro databricks__ai_agg(input_column, prompt, order_column, model) -%}
     {{ dbt_context_engineering.require_databricks_serverless() }}
     {%- set model = model or var('model_agg', var('model_generate', none)) -%}
-    {%- if model is none -%}{{ exceptions.raise_compiler_error("ai_agg: set var model_agg or model_generate (Databricks routes ai_agg through ai_query).") }}{%- endif -%}
+    {#- execute-gated, same reasoning as default__ai_agg above: an unguarded raise here breaks
+        parsing of the whole project the moment any model anywhere calls ai_agg() without a
+        model var set, not just the model that does. -#}
+    {%- if model is none -%}{%- if execute -%}{{ exceptions.raise_compiler_error("ai_agg: set var model_agg or model_generate (Databricks routes ai_agg through ai_query).") }}{%- else -%}{%- set model = 'unset' -%}{%- endif -%}{%- endif -%}
     {#- collect_list/array_agg do not support an inline ORDER BY on this engine (confirmed live
         2026-08-23: neither `array_agg(x order by y)` nor `... within group (order by y)` compiles),
         so a deterministic order needs sort_array over a struct instead. Without order_column, the

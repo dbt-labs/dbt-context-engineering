@@ -65,7 +65,7 @@ to 2 rows). It also creates real tables.
 
 ### 3.1 One-time setup — one profile, three targets
 
-Add a single `dbt-context-engineering` profile to `~/.dbt/profiles.yml` (matching
+Add a single `dbt_context_engineering` profile to `~/.dbt/profiles.yml` (matching
 `integration_tests/cloud`'s and `integration_tests/duckdb`'s `profile:`), with one target per
 warehouse. See `integration_tests/sample.profiles.yml` for a copy-paste starting point with every
 required field.

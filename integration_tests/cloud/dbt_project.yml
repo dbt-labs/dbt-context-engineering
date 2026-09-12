@@ -4,9 +4,9 @@ config-version: 2
 
 # Live cloud-warehouse integration tests. One project, three targets — snowflake (Cortex),
 # databricks, bigquery — selected via `dbt run --target`. Uses the user's ~/.dbt
-# profile 'dbt-context-engineering'.
+# profile 'dbt_context_engineering'.
 # This RUNS REAL AI CALLS (small cost) once the AI models are executed.
-profile: 'dbt-context-engineering'
+profile: 'dbt_context_engineering'
 
 model-paths: ["models"]
 seed-paths: ["seeds"]

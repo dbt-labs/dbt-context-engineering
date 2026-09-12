@@ -34,8 +34,17 @@
 {% macro embedding_fn_fingerprint(model=none, dimension=none, extra=none) -%}
     {%- set model = model if model is not none else var('embedding_model', none) -%}
     {%- if model is none -%}
-        {{ exceptions.raise_compiler_error(
-            "embedding_fn_fingerprint: set var embedding_model or pass model=.") }}
+        {#- execute-gated, same reasoning as require_ai_functions_enabled (see
+            require_prerequisites.sql): dbt's parse phase renders every model's Jinja to build
+            the manifest regardless of --select, so an unguarded raise here breaks parsing of the
+            whole project the moment any one model anywhere calls this, not just the model that
+            does. A placeholder is fine at parse time since the result is never executed. -#}
+        {%- if execute -%}
+            {{ exceptions.raise_compiler_error(
+                "embedding_fn_fingerprint: set var embedding_model or pass model=.") }}
+        {%- else -%}
+            {%- set model = 'unset' -%}
+        {%- endif -%}
     {%- endif -%}
 
     {%- set canonical = {'model': model, 'dimension': dimension, 'extra': extra} -%}

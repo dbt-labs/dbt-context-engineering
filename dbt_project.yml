@@ -90,8 +90,12 @@ vars:
   # Snowflake ONLY -- required when embedding_canary runs there. VECTOR's dimension is part of its
   # type and Snowflake requires a literal there (confirmed live: a dynamic dimension expression is
   # a syntax error), so the baseline's parsed-from-JSON vector needs this to know its own shape.
-  # Set to your embedding_model's known output dimension (e.g. 768 for snowflake-arctic-embed-m-v1.5).
-  embedding_canary_vector_dimension: null
+  # Defaults to 768, snowflake-arctic-embed-m-v1.5's output dimension, so the package parses with
+  # no setup. Override to match your embedding_model's actual output dimension if it differs --
+  # embedding_fn_fingerprint (keyed on embedding_model, not dimension) already excludes stale
+  # baseline rows on any model change, so a mismatched value here surfaces as a cast error rather
+  # than a silently wrong comparison.
+  embedding_canary_vector_dimension: 768
   # warn in prod (a benign wobble should not fail a scheduled build); CI overrides this to
   # 'error' so a PR cannot merge past real drift.
   embedding_canary_test_severity: warn

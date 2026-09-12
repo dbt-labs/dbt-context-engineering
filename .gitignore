@@ -13,3 +13,4 @@ tasks/
 .claude/
 CLAUDE.md
 .DS_Store
+dbt_internal_packages/

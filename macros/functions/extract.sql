@@ -40,7 +40,10 @@
         row yields null rather than a fabricated citation (AI_COMPLETE invents a value for a required
         field it cannot fill; confirmed live 2026-07-31). -#}
     {%- set model = model or var('model_extract', var('model_generate', none)) -%}
-    {%- if model is none -%}{{ exceptions.raise_compiler_error("extract: set var model_extract or model_generate (Snowflake routes extract through ai_complete).") }}{%- endif -%}
+    {#- execute-gated, same reasoning as default__extract above: an unguarded raise here breaks
+        parsing of the whole project the moment any model anywhere calls extract() without a
+        model var set, not just the model that does. -#}
+    {%- if model is none -%}{%- if execute -%}{{ exceptions.raise_compiler_error("extract: set var model_extract or model_generate (Snowflake routes extract through ai_complete).") }}{%- else -%}{%- set model = 'unset' -%}{%- endif -%}{%- endif -%}
     {%- set _max_out = var('max_output_tokens', none) -%}
     ai_complete(
         model => '{{ model }}',
@@ -61,7 +64,8 @@
         structured output — the same json_schema envelope generate uses — so the output_schema
         contract holds. Confirmed live 2026-07-17. -#}
     {%- set model = model or var('model_extract', var('model_generate', none)) -%}
-    {%- if model is none -%}{{ exceptions.raise_compiler_error("extract: set var model_extract or model_generate (Databricks routes extract through ai_query).") }}{%- endif -%}
+    {#- execute-gated; see snowflake__extract above. -#}
+    {%- if model is none -%}{%- if execute -%}{{ exceptions.raise_compiler_error("extract: set var model_extract or model_generate (Databricks routes extract through ai_query).") }}{%- else -%}{%- set model = 'unset' -%}{%- endif -%}{%- endif -%}
     {%- set _max_out = var('max_output_tokens', none) -%}
     ai_query(
         '{{ model }}',

@@ -1,6 +1,6 @@
 # Example ~/.dbt/profiles.yml entry for this repo's integration tests.
 #
-# One profile, `dbt-context-engineering`, shared by every integration-test project:
+# One profile, `dbt_context_engineering`, shared by every integration-test project:
 #   - integration_tests/duckdb  -> target `dev`                             (credential-free;
 #                                                              usually run with its own
 #                                                              --profiles-dir, so this entry is
@@ -14,7 +14,7 @@
 # and replace every `<...>` placeholder with real values. Never commit real credentials — this
 # file only ever holds placeholders.
 
-dbt-context-engineering:
+dbt_context_engineering:
   target: snowflake   # pick whichever you run most often locally; override per-invocation with --target
   outputs:
 

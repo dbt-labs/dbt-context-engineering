@@ -3,9 +3,11 @@
 # DOES connect at startup on every cloud adapter, so the structure gate uses parse, not compile.)
 # Real credentials are NEVER stored in the repo — the live battery reads them from a GH secret.
 #
-# One profile, one target per cloud adapter (integration_tests/cloud's `profile:`).
+# One profile, one target per cloud adapter, shared by every project in this repo (root package
+# and both integration_tests projects all declare profile: 'dbt_context_engineering', matching the
+# package's own `name:`).
 
-dbt-context-engineering:    # integration_tests/cloud
+dbt_context_engineering:
   target: snowflake
   outputs:
     snowflake:

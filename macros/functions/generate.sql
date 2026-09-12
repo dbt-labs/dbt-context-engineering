@@ -35,7 +35,10 @@
 
 {% macro snowflake__generate(input_column, prompt, output_schema, model) -%}
     {%- set model = model or var('model_generate', none) -%}
-    {%- if model is none -%}{{ exceptions.raise_compiler_error("generate: set var model_generate or pass model=.") }}{%- endif -%}
+    {#- execute-gated, same reasoning as default__generate above: an unguarded raise here breaks
+        parsing of the whole project the moment any model anywhere calls generate() without a
+        model var set, not just the model that does. -#}
+    {%- if model is none -%}{%- if execute -%}{{ exceptions.raise_compiler_error("generate: set var model_generate or pass model=.") }}{%- else -%}{%- set model = 'unset' -%}{%- endif -%}{%- endif -%}
     {#- Output cap: AI_COMPLETE takes a model_parameters OBJECT; max_tokens bounds the response.
         No thinking-budget knob here — Cortex models don't run Gemini-style default thinking. -#}
     {%- set _max_out = var('max_output_tokens', none) -%}
@@ -57,7 +60,8 @@
 {% macro databricks__generate(input_column, prompt, output_schema, model) -%}
     {{ dbt_context_engineering.require_databricks_serverless() }}
     {%- set model = model or var('model_generate', none) -%}
-    {%- if model is none -%}{{ exceptions.raise_compiler_error("generate: set var model_generate or pass model=.") }}{%- endif -%}
+    {#- execute-gated; see snowflake__generate above. -#}
+    {%- if model is none -%}{%- if execute -%}{{ exceptions.raise_compiler_error("generate: set var model_generate or pass model=.") }}{%- else -%}{%- set model = 'unset' -%}{%- endif -%}{%- endif -%}
     {#- Output cap: ai_query takes a modelParameters STRUCT; max_tokens bounds the response.
         No thinking-budget knob — foundation models here don't run thinking on by default. -#}
     {%- set _max_out = var('max_output_tokens', none) -%}

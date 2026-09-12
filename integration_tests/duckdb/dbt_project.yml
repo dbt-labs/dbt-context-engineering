@@ -5,7 +5,7 @@ config-version: 2
 # Credential-free deterministic test project (ADR-0015). duckdb executes the chunking
 # SQL locally so Phase 1 chunking is really validated, not just compiled. Consumes the package
 # above as a local dependency.
-profile: 'dbt-context-engineering'
+profile: 'dbt_context_engineering'
 
 model-paths: ["models"]
 seed-paths: ["seeds"]

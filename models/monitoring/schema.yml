@@ -44,3 +44,11 @@ models:
           ever being compared across engines.
         tests:
           - not_null
+      - name: embedding_logic_hash
+        description: >
+          embedding_logic_hash() at the time this row was built: a content hash of this package's
+          embedding-relevant source (ADR-0025). Audit only. It is never joined on, never compared
+          against the baseline, and never an input to any fingerprint. It is here so a drifted
+          canary row can be attributed to a package change or ruled out as one.
+        tests:
+          - not_null

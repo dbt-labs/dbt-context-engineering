@@ -57,7 +57,7 @@
 
 
 {% macro databricks__extract(input_column, prompt, output_schema, model) -%}
-    {{ dbt_context_engineering.require_databricks_serverless() }}
+    {{ dbt_context_engineering.require_databricks_ai_runtime() }}
     {#- Databricks `ai_extract` is label-based (an array of field names) and cannot honor the
         package's typed schema — enums, the evidence/quote field, additionalProperties. It rejects
         a JSON schema outright (AI_FUNCTION_COMPILATION_ERROR). Route extraction through `ai_query`

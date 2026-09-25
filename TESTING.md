@@ -33,15 +33,16 @@ mkdir -p target   # duckdb writes its file relative to CWD; ensure the dir exist
 dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb --full-refresh
 ```
 
-Expected result: **`Done. PASS=191 WARN=0 ERROR=0 SKIP=0`**, verified 2026-09-24. The count grows
+Expected result: **`Done. PASS=201 WARN=0 ERROR=0 SKIP=0`**, verified 2026-09-24. The count grows
 as tests are added, so treat the run summary as the source of truth rather than this number.
 
 > ⚠️ **Always pass `--full-refresh`.** Several tests are phase-parameterized and read their
 > baseline from a freshly built table. A second plain `dbt build` over an already-populated
 > database fails `assert_logged_delta`, `assert_content_hash_delta`, and `assert_chunk_fp_probe`,
-> because each reads a 0-row delta instead of its baseline (verified 2026-09-24: `189 total |
-> 186 success | 3 error` on Fusion, identical on Core). This is the repeat-build artifact, not a
-> regression. `--full-refresh` resets them.
+> because each reads a 0-row delta instead of its baseline (verified 2026-09-25: `199 total |
+> 196 success | 3 error` on Fusion, `PASS=198 ERROR=3 TOTAL=201` on Core, the same three tests).
+> This is the repeat-build artifact, not a regression. `--full-refresh` resets them. All three
+> duckdb CI jobs pass the flag for this reason rather than relying on a clean runner.
 
 ### Verify the circuit breaker actually trips (credential-free)
 
@@ -125,9 +126,11 @@ dbt build --project-dir integration_tests/cloud --target bigquery --full-refresh
 There is no CI job for this. The cloud suite runs locally, against your own profile, by following
 §4's cloud pass.
 
-Expected result: all models build and all **29** `assert_*` tests pass, for
-`TOTAL=134` per target (verified 2026-09-24 on Snowflake, Databricks, and BigQuery, under both
-dbt Core and dbt Fusion). A failure here is meaningful
+Expected result: all models build and all **32** `assert_*` tests pass, for
+`TOTAL=144` per target. The 134 previously recorded here was verified live on all three targets
+under both binaries on 2026-09-24. The 144 is that run plus the ten nodes added since, counted
+from the parsed manifest rather than from a live run, so treat it as the number to expect and the
+run summary as the source of truth. A failure here is meaningful
 — it means a wrapper's dialect is wrong for that account, a model returned nothing, or the AI
 produced an off-taxonomy / ungrounded result. See §5.
 
@@ -175,6 +178,7 @@ fix the one line).
 | Chunking | `chunk_utterances`, `chunk_docs`, `chunk_overlap`, `split_docs` | `assert_expected_boundaries`, `assert_soft_cap`, `assert_lineage_exactly_once`, `assert_overlap_boundaries`, `assert_overlap_coverage`, `assert_sentence_split` + `unique`/`not_null` |
 | Prompts | `render_prompt_test`, `augment_test` | `assert_render_prompt`, `assert_augment_prompt` (enum injection) |
 | Cost guard | `guard_pass` | `not_null` + the §2 trip check |
+| Cost guard, per-group (`guard_agg_batch`) | `guard_agg_pass` | pass path on every build; the trip path is a CI step at `max_agg_group_tokens: 1` |
 | Run log | `logged_model`, `ai_run_log` | `assert_run_log` |
 | Run log (incremental delta, multi-run) | `logged_delta` | `assert_logged_delta` via the multi-run CI step (§4.2) |
 | Version guard | `versioned` | `assert_versioned` |
@@ -195,6 +199,12 @@ fix the one line).
 | chunk_id orphaning (multi-run, expected failure) | `orphan_chunks`, `orphan_embeddings`, `orphan_amd`, `orphan_kb*` | `relationships` tests (§4.4) |
 | **Embedding canary (ADR-0026)** | `embedding_canary` (package model, `monitoring: +enabled: true`) + `embedding_canary_baseline` seed | `assert_embedding_canary_matches_baseline`, severity `warn` here (the duckdb probe compares a fixed stand-in against itself, similarity 1.0) |
 | Canary calibration | `canary_calibration` | `assert_canary_calibration_sensitivity` (checks `canary_cosine_similarity` against known similarities) |
+| Oversized-chunk test (`no_oversized_chunks`) | `chunk_sized` | the generic test itself, passing at the default target; a CI step re-runs it at `sized_target_tokens: 3` and requires it to fail |
+| Dev-mode sampling (`dev_sample_filter`) | `sample_filtered` | `assert_dev_sample_filter`, full corpus on a normal build and a CI step at `ai_sample_rows: 4` |
+| Embedding logic hash as an audit column (ADR-0025) | `embedding_canary` | `assert_embedding_logic_hash_lands` + `not_null` |
+| Safety-gate raise paths | `probe_ai_gate`, `probe_view_gate`, `probe_full_refresh_gate` (disabled unless their `gate_probe` var selects them) | CI steps only, each matching the gate's error message rather than inverting an exit code |
+| `create_vector_index` (no warehouse) | none (run-operation only) | `assert_create_vector_index_ddl` for the Snowflake and BigQuery DDL text, plus the three `probe_create_vector_index_*` raise probes. All CI steps |
+| Canary re-bless serializer | `embedding_canary` | `assert_canary_vector_roundtrip`, plus a CI step running `print_embedding_canary` itself |
 
 ### `integration_tests/cloud` (`--target snowflake` / `databricks` / `bigquery`) — real warehouse
 
@@ -222,6 +232,11 @@ conditionals in `dbt_project.yml`.
 | Knowledge base (per-arm delta, multi-run) | `kb_delta`, `kb_delta_*_stg` | `assert_kb_delta` (§4.7) | deterministic |
 | chunk_id orphaning (multi-run, expected failure) | `orphan_chunks`, `orphan_embeddings`, `orphan_amd`, `orphan_kb*` | `relationships` tests (§4.4) | deterministic |
 | **Embedding canary (ADR-0026)** | `embedding_canary` (package model, `monitoring: +enabled: true`) + `embedding_canary_baseline` seed, makes a real `embed()` call | `assert_embedding_canary_matches_baseline`, severity raised to `error` in this project | live |
+| Oversized-chunk test (`no_oversized_chunks`) | `chunk_sized` | the generic test itself (parity with duckdb; the trip path is exercised on duckdb only, since the test is engine-independent SQL) | deterministic |
+| Dev-mode sampling (`dev_sample_filter`) | `sample_filtered` | `assert_dev_sample_filter`. The point on a warehouse is portability: this is where the emitted `QUALIFY` is proven to parse on Snowflake, Databricks, and BigQuery | deterministic |
+| Groundedness generic test (`grounded`) | `extract_flat` | the `grounded` wrapper itself, `allow_empty: true`. `assert_extract_grounded` alongside it checks the same property by calling the internals directly, so the pair covers both the internals and the wrapper a consumer writes | live |
+| Embedding logic hash as an audit column (ADR-0025) | `embedding_canary` | `assert_embedding_logic_hash_lands` + `not_null` | deterministic |
+| Canary re-bless serializer | `embedding_canary` | `assert_canary_vector_roundtrip`. This is where each engine's own `canary_vector_to_json` is proven to round-trip a real vector, which is what a pasted baseline depends on | live |
 
 ### 4.1 The multi-run version-guard step
 
@@ -615,7 +630,7 @@ Fusion, which changes what you are testing without saying so.
 
 | # | Step | Assumes | Pass looks like |
 |---|---|---|---|
-| 1 | Full-refresh baseline: `$DBT build $D --full-refresh` | anything | `PASS=191` |
+| 1 | Full-refresh baseline: `$DBT build $D --full-refresh` | anything | `PASS=201` |
 | 2 | §4.1 version guard, v1 then v2 | step 1 | both runs green |
 | 3 | §4.10 `vg_adopt` adoption | step 1 | second run green, v1 stamped |
 | 4 | §4.2 `logged_delta` phase 2 | step 1 | `row_count = 5` |
@@ -641,21 +656,21 @@ database inconsistent:
 ```bash
 $DBT build $D --indirect-selection cautious --full-refresh \
   --select orphan_chunks orphan_embeddings --vars '{oc_target_tokens: 20}'
-$DBT build $D --full-refresh          # back to PASS=191
+$DBT build $D --full-refresh          # back to PASS=201
 ```
 
 #### cloud pass (real AI calls, run once per target)
 
 | # | Step | Assumes | Pass looks like |
 |---|---|---|---|
-| 1 | Full-refresh baseline: `$DBT build $C --full-refresh --vars '{ai_functions_enabled: true}'` | anything | `TOTAL=134`, ideally `PASS=134` |
+| 1 | Full-refresh baseline: `$DBT build $C --full-refresh --vars '{ai_functions_enabled: true}'` | anything | `TOTAL=144`, ideally `PASS=144` |
 | 2 | §4.1 version guard, v1 then v2 | step 1 | both runs green |
 | 3 | §4.3 content-hash delta phase 2 | a *fresh* step 1 | `row_count = 1` |
 | 4 | §4.5 chunk partition delta phase 2 | step 1 | per §4.5 |
 | 5 | §4.6 attach_metadata delta phase 2 | step 1 | per §4.6 |
 | 6 | §4.7 knowledge_base per-arm delta phase 2 | step 1 | per §4.7 |
 | 7 | §4.4 orphan sequence | step 1 | the `relationships` test **FAILS** |
-| 8 | **Cleanup rebuild (mandatory)** | step 7 | `TOTAL=134` again |
+| 8 | **Cleanup rebuild (mandatory)** | step 7 | `TOTAL=144` again |
 
 §4.1's cloud half used to run in a CI job. That job is gone (it never once executed and depended
 on a repo secret that never existed), so this pass is now the only thing covering it.
@@ -737,8 +752,19 @@ than a named one), or a BigQuery project without the AI API enabled.
 
 What remains uncovered or conditional (everything else is now covered on all three warehouses):
 
-- **`create_vector_index`** — run-operation only; creates external, billed objects. **Deliberately
-  excluded** from the suite (`LIVE-VALIDATION DEFERRED`).
+- **`create_vector_index`, the live half.** Run-operation only, and it creates external, billed
+  objects, so an actual create-and-drop cycle on Snowflake and BigQuery stays out of the suite
+  (`LIVE-VALIDATION DEFERRED`). The other three implementations are covered without one:
+  `default__` and `databricks__` raise, and the Snowflake and BigQuery DDL strings are asserted
+  as assembled text by `assert_create_vector_index_ddl`. That proves every argument is
+  interpolated and the optional clauses appear and disappear with their arguments. It does not
+  prove either warehouse accepts the DDL.
+- **The Databricks runtime prerequisite is documented but unenforced.**
+  `require_databricks_ai_runtime()` has an empty body. The real requirement is DBR 15.4 LTS or
+  above and not Databricks SQL Classic. Enforcing it needs a `current_version()` round trip at
+  compile time on every AI-calling model, which is a cost and a design decision, and it cannot be
+  validated without a Databricks warehouse. Until then an unmet prerequisite is an opaque SQL
+  error rather than a named one.
 - **The cloud suite never runs in CI.** It runs only locally, against your own profile, by
   following §4.11's cloud pass. A `live-battery` job existed until it was deleted: it was gated
   on `workflow_dispatch`, was never once dispatched across 54 recorded runs, and depended on a
@@ -782,6 +808,38 @@ What remains uncovered or conditional (everything else is now covered on all thr
 - `log_ai_run` INSERT asserted on cloud (`assert_run_log`).
 - `version_guard` delta and bump run on all three warehouses (§4.1).
 - Content-hash delta and chunk_id orphaning run on all three warehouses (§4.3, §4.4).
+- **The safety gates' raise paths.** `require_ai_functions_enabled`,
+  `require_safe_materialization` and `require_full_refresh_gate` are wired into all five AI
+  wrappers and none of them had a test on the raising side. Each now has a CI step that matches
+  the gate's error message, plus a positive control proving the other three fail because of the
+  gate rather than because duckdb cannot embed.
+- **`require_ai_functions_enabled` failed open on a string.** The gate tested truthiness, and
+  every non-empty string is truthy in Jinja, so `ai_functions_enabled: "false"` opened it. Jinja
+  in `dbt_project.yml` renders into the YAML text before parsing and has to be quoted, which
+  means the natural per-target form, `"{{ 'true' if target.name == 'prod' else 'false' }}"`,
+  permitted spend on every non-prod target. The gate now normalizes to text and compares, and an
+  unrecognized value raises instead of reading as off.
+- **`guard_agg_batch`'s trip path**, which needed a warehouse to execute at all: its only caller
+  was a pre-hook on the cloud `ai_agg` model. `guard_agg_pass` covers the pass path on duckdb
+  every build and a CI step covers the raise.
+- **Shipped-but-uncalled code.** `no_oversized_chunks` and `grounded` are attached in the
+  integration projects; `dev_sample_filter` has a caller and a row-count assertion;
+  `print_embedding_canary` runs, and `assert_canary_vector_roundtrip` proves each engine's
+  `canary_vector_to_json` serializes a real vector back into something the comparison parses;
+  `embedding_logic_hash()` is emitted as the audit column ADR-0025 describes and asserted to
+  land. `require_bq_model` was deleted rather than tested: nothing called it, and the README
+  already states `bq_connection` is optional and the `AI.*` functions need no `CREATE MODEL`.
+- **The `embedding_logic_hash` call-graph walk missed bare `adapter.dispatch`.** ADR-0025 built
+  the walk on the claim that every macro call is package-qualified. `chunk.sql` reaches
+  `array_agg` and `string_agg` bare, so those edges were invisible. The walk now follows both,
+  lives in `ci/macro_call_graph.py`, and has its own tests in `ci/test_macro_call_graph.py`.
+- **The floor jobs were not testing a floor.** They pinned `dbt-core==1.11.0` but left the
+  adapter unpinned, and adapters depend on `dbt-adapters` rather than a pinned core, so pip
+  resolved a 1.12.x adapter on top of 1.11.0 core, a combination nobody ships. The adapters are
+  pinned to 1.11.0 too.
+- **`dbt_utils` was declared and never used.** No macro in the package called it, so the
+  declaration was imposing a transitive install and a `<2.0.0` constraint on every consumer for
+  nothing. Removed from `packages.yml`.
 
 **Adversarial cloud coverage, added 2026-08-10,** on all three warehouses (`LIVE-VALIDATION
 DEFERRED` until the next cloud pass):

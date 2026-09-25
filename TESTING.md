@@ -127,10 +127,8 @@ There is no CI job for this. The cloud suite runs locally, against your own prof
 §4's cloud pass.
 
 Expected result: all models build and all **32** `assert_*` tests pass, for
-`TOTAL=144` per target. The 134 previously recorded here was verified live on all three targets
-under both binaries on 2026-09-24. The 144 is that run plus the ten nodes added since, counted
-from the parsed manifest rather than from a live run, so treat it as the number to expect and the
-run summary as the source of truth. A failure here is meaningful
+`TOTAL=144` per target (verified 2026-09-25 on Snowflake, Databricks, and BigQuery, under both
+dbt Core and dbt Fusion). A failure here is meaningful
 — it means a wrapper's dialect is wrong for that account, a model returned nothing, or the AI
 produced an off-taxonomy / ungrounded result. See §5.
 

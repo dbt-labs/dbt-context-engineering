@@ -39,14 +39,14 @@
         dbt_context_engineering.snowflake__create_vector_index(
             'my_idx', 'db.sch.docs', 'embedding', ['a', 'b'], 'wh', '1 hour', 'e5', 'COSINE', 'IVF', []),
         "create or replace cortex search service my_idx on embedding attributes a, b "
-        ~ "warehouse = wh target_lag = '1 hour' embedding_model = 'e5' as (select * from db.sch.docs)") %}
+        ~ "warehouse = wh target_lag = '1 hour' embedding_model = 'e5' as (select embedding, a, b from db.sch.docs)") %}
 
     {#- attributes and embedding_model must disappear entirely, not render empty. -#}
     {% do _cvi_expect(failures, 'snowflake__create_vector_index (minimal)',
         dbt_context_engineering.snowflake__create_vector_index(
             'my_idx', 'db.sch.docs', 'embedding', [], 'wh', '1 day', none, 'COSINE', 'IVF', []),
         "create or replace cortex search service my_idx on embedding "
-        ~ "warehouse = wh target_lag = '1 day' as (select * from db.sch.docs)") %}
+        ~ "warehouse = wh target_lag = '1 day' as (select embedding from db.sch.docs)") %}
 
     {% do _cvi_expect(failures, 'bigquery__create_vector_index (storing)',
         dbt_context_engineering.bigquery__create_vector_index(

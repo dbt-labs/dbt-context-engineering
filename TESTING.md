@@ -12,6 +12,7 @@ results. Testing posture: structure-only for cloud AI, full deterministic execut
 | **Structure** | `integration_tests/cloud` (all 3 targets) | no | every macro/model/test **renders** the right per-dialect SQL (`dbt parse`, no warehouse connection) | CI `structure` job, on every PR |
 | **Deterministic** | `integration_tests/duckdb` | no | everything that doesn't need a cloud AI service is **executed and asserted** on a local duckdb | CI `deterministic-tests` job, on every PR; run it locally too |
 | **Live battery** | `integration_tests/cloud` (`--target snowflake/databricks/bigquery`) | **yes** | the wrappers + evaluation + accessors actually **run on the real warehouse** and return sane results | **not in CI**. Run locally by following §4.11's cloud pass |
+| **Coverage matrix** | whole package | no | every dispatched macro implementation is reached by a real build, a direct probe, or a declared exception; nothing ships silently uncovered | CI `coverage-matrix` job, on every PR |
 
 The rule of thumb: **duckdb proves the logic; the live battery proves the dialect + the model
 actually works.** A green PR only requires the first two (no credentials). The live battery is how
@@ -992,7 +993,55 @@ pattern accordingly.
 
 ---
 
-## 7. Quick reference
+## 7. The coverage matrix
+
+`COVERAGE_MATRIX.md`, checked into the repo root, is generated from the call graph, the same
+walker (`ci/macro_call_graph.py`) the `embedding_logic_hash` gate uses (`ci/coverage_matrix.py`).
+Prose maintained by hand, the shape the README and this file's §4 tables use for everything
+else, has no way to notice when a shipped implementation is missing from it: `no_oversized_chunks`,
+`grounded`, and several other capabilities have gone uncovered in these tables at points during
+this project despite shipping. A generated matrix, computed from the call graph, cannot drift from
+the code the same way, since it IS a computation over the code. `create_vector_index`'s four
+implementations, `require_databricks_ai_runtime`, and the now-deleted `require_bq_model` all
+reached `main` unexecuted before someone went looking by hand.
+
+Regenerate it after adding or removing a dispatched macro implementation, an entry point (a model,
+a test, a run-operation wired into CI), or a schema.yml test attachment:
+
+```bash
+python ci/coverage_matrix.py --generate
+python ci/test_coverage_matrix.py
+```
+
+Check mode (`python ci/coverage_matrix.py`, no `--generate`) is what CI runs: it fails if the
+checked-in file disagrees with a fresh computation, or if any dispatched macro implementation is
+reached by nothing at all. That second failure mode is the actual gate. Adding a new dispatched
+macro with no coverage anywhere makes the build fail until either something exercises it or
+`ci/coverage_exceptions.yml` gets an entry explaining how it is validated instead.
+
+**What the matrix can prove, and what it cannot.** BUILT means a real `dbt build` of the duckdb or
+cloud project genuinely dispatches to that implementation for that target: the strongest signal,
+since it is the actual mechanism a consumer's own project will use. PROBED means a direct,
+package-qualified call names that exact implementation from a run-operation or model, regardless
+of which connection is active; several of this package's own coverage stories exist only this
+way, and it proves the Jinja renders without a Python-level crash but does not by itself prove the
+resulting SQL is accepted by the warehouse the implementation is named for. What the matrix does
+NOT compute, and does not pretend to: whether a build that reaches an implementation also ASSERTS
+something about its output, versus merely executing it without erroring. That distinction is a
+judgment call about test semantics, not a property of the call graph, and stays in §4's tables,
+in prose, one capability at a time.
+
+**`ci/coverage_exceptions.yml` is not a way to make the gate go away.** Every entry names a real,
+documented validation path elsewhere: a manual procedure in this file, cross-referenced, for
+something that needs a warehouse or exists to produce numbers for an ADR rather than to pass or
+fail a build. `default__ai_agg`, `default__classify`, `default__extract`, `default__generate`, and
+`default__embed` all get the same duckdb positive control: `probe_ai_gate.sql` takes an
+`ai_wrapper` var selecting among all five wrappers, so one probe and one CI step per wrapper
+covers the "not implemented for the 'duckdb' adapter" raise on each.
+
+---
+
+## 8. Quick reference
 
 ```bash
 # Deterministic (do this constantly)

@@ -83,3 +83,31 @@ def walk_call_graph(entry_files: list[Path]) -> list[Path]:
                     queue.append(defining_file)
 
     return sorted(visited)
+
+
+def walk_macro_names(entry_files: list[Path]) -> set[str]:
+    """Same traversal as walk_call_graph, returning the macro NAMES reached rather than the
+    files that define them. A file can define several macros (every dispatch fan-out lives in one
+    file per adapter, but a helper file like t_array_helpers.sql defines more than one), and a
+    coverage matrix needs to know which specific name was reached, not just that some file
+    touching that name was visited. Used to build ci/coverage_matrix.py's reachability data.
+    Not used by the embedding_logic_hash gate, which only ever needed the file set.
+    """
+    all_sql_files = sorted(MACROS_DIR.rglob("*.sql"))
+    visited_files: set[Path] = set()
+    visited_names: set[str] = set()
+    queue = list(entry_files)
+
+    while queue:
+        current = queue.pop()
+        if current in visited_files:
+            continue
+        visited_files.add(current)
+
+        for macro_name in called_macro_names(current.read_text()):
+            visited_names.add(macro_name)
+            for defining_file in _find_defining_files(macro_name, all_sql_files):
+                if defining_file not in visited_files:
+                    queue.append(defining_file)
+
+    return visited_names

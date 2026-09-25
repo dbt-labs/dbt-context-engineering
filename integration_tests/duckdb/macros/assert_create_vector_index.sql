@@ -69,6 +69,29 @@
 {% endmacro %}
 
 
+{#- drop_vector_index's DDL-assembly half, same shape as assert_create_vector_index_ddl above:
+    the Snowflake and BigQuery DDL strings, asserted as assembled text. See
+    ci/coverage_matrix.py's own docstring for what an assembled-text check can and cannot prove. -#}
+{% macro assert_drop_vector_index_ddl() %}
+    {% set failures = [] %}
+
+    {% do _cvi_expect(failures, 'snowflake__drop_vector_index',
+        dbt_context_engineering.snowflake__drop_vector_index('my_idx', none),
+        "drop cortex search service if exists my_idx") %}
+
+    {% do _cvi_expect(failures, 'bigquery__drop_vector_index',
+        dbt_context_engineering.bigquery__drop_vector_index('my_idx', 'db.sch.zz_vec_scratch'),
+        "drop vector index if exists my_idx on db.sch.zz_vec_scratch") %}
+
+    {% if failures %}
+        {{ exceptions.raise_compiler_error(
+            "assert_drop_vector_index_ddl: " ~ (failures | length) ~ " implementation(s) did not "
+            ~ "match.\n  " ~ (failures | join("\n  "))) }}
+    {% endif %}
+    {{ log("assert_drop_vector_index_ddl: all rendered DDL matches.", info=true) }}
+{% endmacro %}
+
+
 {% macro probe_create_vector_index_default() %}
     {{ dbt_context_engineering.default__create_vector_index(
         'my_idx', 'db.sch.docs', 'embedding', [], none, '1 day', none, 'COSINE', 'IVF', []) }}
@@ -82,4 +105,17 @@
 {% macro probe_create_vector_index_snowflake_no_warehouse() %}
     {{ dbt_context_engineering.snowflake__create_vector_index(
         'my_idx', 'db.sch.docs', 'embedding', [], none, '1 day', none, 'COSINE', 'IVF', []) }}
+{% endmacro %}
+
+
+{% macro probe_drop_vector_index_default() %}
+    {{ dbt_context_engineering.default__drop_vector_index('my_idx', none) }}
+{% endmacro %}
+
+{% macro probe_drop_vector_index_databricks() %}
+    {{ dbt_context_engineering.databricks__drop_vector_index('my_idx', none) }}
+{% endmacro %}
+
+{% macro probe_drop_vector_index_bigquery_no_relation() %}
+    {{ dbt_context_engineering.bigquery__drop_vector_index('my_idx', none) }}
 {% endmacro %}

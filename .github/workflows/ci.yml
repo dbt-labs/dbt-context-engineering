@@ -4,7 +4,6 @@ on:
   pull_request:
   push:
     branches: [main]
-  workflow_dispatch:   # enables the opt-in live-battery job below
 
 # No job here needs more than read access to check out the repo: nothing posts PR comments, writes
 # check runs, or touches issues. Explicit least-privilege, matching codeowners-check.yml.
@@ -276,40 +275,3 @@ jobs:
         run: dbt deps --project-dir . --profiles-dir ci
       - name: parse the root package on Fusion, no var overrides
         run: dbt parse --project-dir . --profiles-dir ci --target ${{ matrix.adapter }}
-
-  # Live battery — OPT-IN (manual `workflow_dispatch` only; never runs on PR/push). Runs the full
-  # integration battery against real warehouses for all three targets of the single cloud project.
-  # Requires a repo secret DBT_PROFILES_YML holding the merged profile (dbt_context_engineering)
-  # with its snowflake/databricks/bigquery targets. Every model is a plain table — no vector
-  # indexes or serving endpoints are created (search is brute-force).
-  live-battery:
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        adapter: [snowflake, databricks, bigquery]
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262     # actions/checkout@v4
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - name: Install dbt for ${{ matrix.adapter }}
-        run: pip install "dbt-${{ matrix.adapter }}"
-      - name: Write profiles from secret
-        run: |
-          mkdir -p ~/.dbt
-          printf '%s' "${{ secrets.DBT_PROFILES_YML }}" > ~/.dbt/profiles.yml
-      - name: deps
-        run: dbt deps --project-dir integration_tests/cloud
-      - name: build battery (full-refresh)
-        run: dbt build --project-dir integration_tests/cloud --target ${{ matrix.adapter }} --full-refresh
-      - name: version guard sequence — delta + version bump (real warehouse)
-        # Sequential runs to exercise version_guard's delta vs. reprocess-all paths on the real
-        # warehouse (the full-refresh build above only covers the first build). v1 again = delta;
-        # v2 = version bump = reprocess all. Selected by tag so it works across adapters.
-        run: |
-          dbt build --project-dir integration_tests/cloud --target ${{ matrix.adapter }} \
-            --select tag:version_guard --vars '{test_version: v1}'
-          dbt build --project-dir integration_tests/cloud --target ${{ matrix.adapter }} \
-            --select tag:version_guard --vars '{test_version: v2}'

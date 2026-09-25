@@ -18,11 +18,18 @@
 
 
 {% macro require_databricks_serverless() -%}
-    {#- Databricks AI functions need serverless / DBR 18.2+; not on classic/Pro warehouses.
-        Phase 0 stub: real runtime check (query the warehouse/cluster and raise on classic/Pro)
-        lands when live creds exist to verify it against. For now it documents the requirement
-        and is a no-op so compile passes; see README.md's macro reference ("Databricks deferred")
-        and TESTING.md's `assert_wrappers_nonnull` note for the manual cross-check today. -#}
+    {#- Databricks AI functions require DBR 15.4 LTS or above and are not available on
+        Databricks SQL Classic. Per Databricks' own docs, DBR 18.2+ is RECOMMENDED, not
+        required, and Pro is not excluded. An earlier version of this comment claimed
+        "serverless / DBR 18.2+; not on classic/Pro", which overstates the floor and names a
+        tier the vendor does not rule out.
+
+        Phase 0 stub: the real runtime check (query the warehouse/cluster and raise on SQL
+        Classic or DBR < 15.4 LTS) is still unimplemented, so this is a no-op and the
+        prerequisite is documented but UNENFORCED. An unmet prerequisite therefore surfaces as
+        an opaque SQL error at build time rather than a compiler error naming the cause. See
+        README.md's macro reference ("Databricks deferred") and TESTING.md §5's
+        `assert_wrappers_nonnull` row for the manual cross-check today. -#}
 {%- endmacro %}
 
 

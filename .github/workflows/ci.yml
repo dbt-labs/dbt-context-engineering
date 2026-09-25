@@ -316,9 +316,14 @@ jobs:
         run: dbt parse --project-dir integration_tests/cloud --profiles-dir ci --target ${{ matrix.adapter }}
 
   # Fusion gate (ADR-0032), duckdb side. Same shape as `deterministic-tests`, on Fusion. Excludes
-  # embedding_canary_baseline and its dependent test: Fusion's duckdb adapter cannot load a
-  # package-owned seed (dbt-core#16128 / dbt-context-engineering#18), a confirmed upstream engine
-  # bug, not a regression in this package's code. Remove the --exclude once that's fixed upstream.
+  # embedding_canary_baseline and its dependent test: Fusion's duckdb adapter duplicates the
+  # package path segment when resolving a package-owned seed, looking for
+  #   dbt_packages/dbt_context_engineering/dbt_packages/dbt_context_engineering/seeds/embedding_canary_baseline.csv
+  # (dbt-core#16128 / dbt-context-engineering#18). A confirmed upstream engine bug, not a
+  # regression in this package's code, and still present in 2.0.0-preview.218. It affects duckdb
+  # only: Fusion loads the same package seed correctly on all three cloud targets. The duplicated
+  # path is the signature to check against when a Fusion bump lands, so remove the --exclude once
+  # a run stops looking for that doubled path.
   fusion-deterministic-tests:
     runs-on: ubuntu-latest
     steps:

@@ -4,7 +4,6 @@ on:
   pull_request:
   push:
     branches: [main]
-  workflow_dispatch:   # enables the opt-in live-battery job below
 
 # No job here needs more than read access to check out the repo: nothing posts PR comments, writes
 # check runs, or touches issues. Explicit least-privilege, matching codeowners-check.yml.
@@ -26,6 +25,13 @@ jobs:
           python-version: "3.11"
       - name: verify embedding_logic_hash() is not stale
         run: python ci/verify_embedding_logic_hash.py
+      - name: call-graph walk regression tests
+        # The walk is the mechanism behind the gate above, so its own behavior needs pinning. Two
+        # kinds of edge reach a macro in this package: a package-qualified call, and a bare
+        # adapter.dispatch, which is how chunk.sql reaches array_agg and string_agg. These tests
+        # cover both kinds plus the exact file set the hash is computed over, so narrowing either
+        # one is a red build rather than a quiet gap.
+        run: python ci/test_macro_call_graph.py
 
   # Structure-only gate (ADR-0015): parse the single cloud integration-test project across
   # all three targets. `dbt parse` renders the wrapper dispatch (bigquery__/snowflake__/databricks__
@@ -65,9 +71,18 @@ jobs:
       - name: build + test (duckdb)
         # duckdb resolves the profile's relative `path:` against the CWD (repo root), and it
         # won't create missing parent dirs — so ensure target/ exists on a clean checkout.
+        #
+        # --full-refresh is required, not cosmetic. Several fixtures are phase-parameterized and
+        # their phase-1 expectations only hold against a fresh database. Over an
+        # already-populated one this same command returns 3 errors (assert_logged_delta,
+        # assert_content_hash_delta,
+        # assert_chunk_fp_probe), because those tests read a 0-row delta instead of their
+        # baselines. A clean runner hides that, which is exactly why the flag belongs here rather
+        # than depending on checkout freshness. TESTING.md §2 states the same requirement.
         run: |
           mkdir -p target
-          dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb
+          dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+            --full-refresh
       - name: circuit breaker trips over ceiling (expect FAILURE)
         # guard_batch must RAISE when a batch exceeds the ceiling. Rebuild the guarded model with
         # a ceiling below the 10-row fixture and assert dbt exits non-zero. Inverts the exit code so
@@ -126,10 +141,120 @@ jobs:
           dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
             --select vg_adopt assert_vg_adopt --vars '{vg_legacy: false, vg_ver: v1}'
 
+      # ---- Safety-gate negative tests -------------------------------------------------------
+      #
+      # require_ai_functions_enabled, require_safe_materialization and require_full_refresh_gate
+      # are wired into all five AI wrappers, and each step below covers one gate's raise path.
+      # Every step asserts the ERROR MESSAGE, via ci/expect_failure.sh, not just a non-zero exit:
+      # these probes call embed(), which has no duckdb implementation, so an exit code alone
+      # cannot tell a tripped gate apart from "duckdb cannot embed". The probe models are disabled
+      # unless their gate_probe var selects them, so a normal build never sees them.
+      - name: spend gate raises when ai_functions_enabled is unset
+        run: |
+          ci/expect_failure.sh "AI functions are disabled by default" \
+            dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+              --select probe_ai_gate --vars '{gate_probe: ai_functions_enabled}'
+      - name: spend gate raises on the STRING "false"
+        # Jinja in dbt_project.yml renders into the YAML text before parsing and has to be
+        # quoted, so a per-target setting such as
+        # "{{ 'true' if target.name == 'prod' else 'false' }}" reaches the gate as the string
+        # "false" rather than a boolean. Every non-empty string is truthy in Jinja, so a gate that
+        # tested truthiness would read that value as ON and permit spend on every non-prod target,
+        # the exact inverse of what the line reads as. The gate compares normalized text instead.
+        run: |
+          ci/expect_failure.sh "AI functions are disabled by default" \
+            dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+              --select probe_ai_gate --vars '{gate_probe: ai_functions_enabled, ai_functions_enabled: "false"}'
+      - name: spend gate rejects a value that is neither true nor false
+        # Fail loud rather than fail closed. Reading an unrecognized value as "off" would turn a
+        # typo into a gate that silently does nothing.
+        run: |
+          ci/expect_failure.sh "must be true or false" \
+            dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+              --select probe_ai_gate --vars '{gate_probe: ai_functions_enabled, ai_functions_enabled: "notabool"}'
+      - name: spend gate stays quiet when genuinely enabled (positive control)
+        # Proves the three steps above fail because of the GATE. With the var really set, the run
+        # gets past it and dies further in, on duckdb having no embed implementation. Without this
+        # control, a gate that raised unconditionally would pass all three.
+        run: |
+          ci/expect_failure.sh "embed is not implemented for the 'duckdb' adapter" \
+            dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+              --select probe_ai_gate --vars '{gate_probe: ai_functions_enabled, ai_functions_enabled: true}'
+      - name: materialization gate raises on a view wrapping an AI call
+        run: |
+          ci/expect_failure.sh "materialized='view' recomputes this call on every query" \
+            dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+              --select probe_view_gate --vars '{gate_probe: safe_materialization, ai_functions_enabled: true}'
+      - name: full-refresh gate raises on an incremental AI model with no full_refresh config
+        run: |
+          ci/expect_failure.sh "with no full_refresh config leaves this" \
+            dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+              --select probe_full_refresh_gate --vars '{gate_probe: full_refresh_gate, ai_functions_enabled: true}'
+      - name: guard_agg_batch trips over the per-group ceiling
+        # guard_agg_pass covers the pass path on every build, and this covers the raise. The
+        # guard is pure SQL, a sum of estimate_tokens per group, so duckdb exercises it exactly as
+        # a warehouse does and neither path needs credentials. The cloud ai_agg pre-hook runs the
+        # same macro against a real engine.
+        run: |
+          ci/expect_failure.sh "exceed max_agg_group_tokens" \
+            dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+              --select guard_agg_pass --vars '{max_agg_group_tokens: 1}'
+
+      # ---- Coverage for package code that ships but no model calls --------------------------
+      - name: no_oversized_chunks catches an oversized chunk
+        # chunk_sized passes this test on every build at its default target. Here the target drops
+        # to 3 so every chunk is oversized and the test must go red. A shipped test that can
+        # only ever pass tells nobody it still works.
+        run: |
+          ci/expect_failure.sh "no_oversized_chunks" \
+            dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+              --select chunk_sized --full-refresh --vars '{sized_target_tokens: 3}'
+      - name: dev_sample_filter caps the row count
+        # The unset case (macro emits nothing, full corpus passes through) is covered by the main
+        # build. This is the sampling case: assert_dev_sample_filter reads the same var and
+        # requires exactly 4 rows, so a QUALIFY clause that did not apply would fail.
+        run: |
+          dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+            --select sample_filtered assert_dev_sample_filter --full-refresh \
+            --vars '{ai_sample_rows: 4}'
+      - name: the embedding-canary re-bless operation runs
+        # print_embedding_canary is the documented recovery path when the canary fires, so it
+        # needs to execute somewhere cheap. What it prints is checked separately and on every
+        # tier by assert_canary_vector_roundtrip, a singular test in the package.
+        run: |
+          dbt run-operation print_embedding_canary \
+            --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb
+      - name: create_vector_index assembles the DDL it claims to
+        # create_vector_index makes an external, separately billed object, so the Snowflake and
+        # BigQuery implementations are covered as assembled text rather than executed. That
+        # proves every argument is interpolated and the optional clauses appear and disappear
+        # with their arguments. It does NOT prove either warehouse accepts the DDL. Only a live
+        # create-and-drop cycle does that.
+        run: |
+          dbt run-operation assert_create_vector_index_ddl \
+            --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb
+      - name: create_vector_index raise paths
+        run: |
+          ci/expect_failure.sh "create_vector_index is not implemented for the 'duckdb' adapter" \
+            dbt run-operation probe_create_vector_index_default \
+              --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb
+          ci/expect_failure.sh "created via the Vector Search API/SDK" \
+            dbt run-operation probe_create_vector_index_databricks \
+              --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb
+          ci/expect_failure.sh "warehouse= is required for a Cortex Search service" \
+            dbt run-operation probe_create_vector_index_snowflake_no_warehouse \
+              --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb
+
   # Floor gate (ADR-0032): require-dbt-version's floor is >=1.11.0. `structure` and
   # `deterministic-tests` above install dbt unpinned, so they only ever validate latest, never the
   # declared floor itself — a future syntax bump could silently raise the true floor with nothing to
   # catch it. Same shape as `structure`, pinned to exactly dbt-core 1.11.0.
+  #
+  # The ADAPTER is pinned to 1.11.0 as well, which is what makes this a floor run. Adapters
+  # depend on dbt-adapters rather than on a pinned dbt-core, so an unpinned
+  # `pip install dbt-snowflake` here would resolve to a 1.12.x adapter sitting on top of dbt-core
+  # 1.11.0, a combination nobody ships and which tests neither end. Adapters version-track core,
+  # so 1.11.0 of each adapter is the release that pairs with the declared core floor.
   floor-structure:
     runs-on: ubuntu-latest
     strategy:
@@ -141,8 +266,8 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Install dbt-core==1.11.0 (the declared floor) for ${{ matrix.adapter }}
-        run: pip install "dbt-core==1.11.0" "dbt-${{ matrix.adapter }}"
+      - name: Install dbt-core and dbt-${{ matrix.adapter }} at the declared floor
+        run: pip install "dbt-core==1.11.0" "dbt-${{ matrix.adapter }}==1.11.0"
       - name: deps
         run: dbt deps --project-dir integration_tests/cloud --profiles-dir ci
       - name: parse at the floor version (renders wrapper dispatch; no warehouse connection)
@@ -157,14 +282,16 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Install dbt-core==1.11.0 (the declared floor) + dbt-duckdb
-        run: pip install "dbt-core==1.11.0" dbt-duckdb
+      - name: Install dbt-core and dbt-duckdb at the declared floor
+        run: pip install "dbt-core==1.11.0" "dbt-duckdb==1.11.0"
       - name: deps
         run: dbt deps --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb
       - name: build + test at the floor version (duckdb)
+        # --full-refresh for the same reason as deterministic-tests above.
         run: |
           mkdir -p target
-          dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb
+          dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+            --full-refresh
 
   # Fusion gate (ADR-0032): require-dbt-version's ceiling now includes dbt Fusion (v2.x). Nothing
   # else in this file exercises Fusion at all, so without this job the Fusion-support claim is only
@@ -204,9 +331,11 @@ jobs:
       - name: deps
         run: dbt deps --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb
       - name: build + test (duckdb, Fusion)
+        # --full-refresh for the same reason as deterministic-tests above.
         run: |
           mkdir -p target
           dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+            --full-refresh \
             --exclude embedding_canary_baseline assert_embedding_canary_matches_baseline
 
   # Root-package parse gate: parse THIS package's own dbt_project.yml directly, with none of its
@@ -251,8 +380,8 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Install dbt-core==1.11.0 (the declared floor) for ${{ matrix.adapter }}
-        run: pip install "dbt-core==1.11.0" "dbt-${{ matrix.adapter }}"
+      - name: Install dbt-core and dbt-${{ matrix.adapter }} at the declared floor
+        run: pip install "dbt-core==1.11.0" "dbt-${{ matrix.adapter }}==1.11.0"
       - name: deps
         run: dbt deps --project-dir . --profiles-dir ci
       - name: parse the root package at the floor version, no var overrides
@@ -276,40 +405,3 @@ jobs:
         run: dbt deps --project-dir . --profiles-dir ci
       - name: parse the root package on Fusion, no var overrides
         run: dbt parse --project-dir . --profiles-dir ci --target ${{ matrix.adapter }}
-
-  # Live battery — OPT-IN (manual `workflow_dispatch` only; never runs on PR/push). Runs the full
-  # integration battery against real warehouses for all three targets of the single cloud project.
-  # Requires a repo secret DBT_PROFILES_YML holding the merged profile (dbt_context_engineering)
-  # with its snowflake/databricks/bigquery targets. Every model is a plain table — no vector
-  # indexes or serving endpoints are created (search is brute-force).
-  live-battery:
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        adapter: [snowflake, databricks, bigquery]
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262     # actions/checkout@v4
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - name: Install dbt for ${{ matrix.adapter }}
-        run: pip install "dbt-${{ matrix.adapter }}"
-      - name: Write profiles from secret
-        run: |
-          mkdir -p ~/.dbt
-          printf '%s' "${{ secrets.DBT_PROFILES_YML }}" > ~/.dbt/profiles.yml
-      - name: deps
-        run: dbt deps --project-dir integration_tests/cloud
-      - name: build battery (full-refresh)
-        run: dbt build --project-dir integration_tests/cloud --target ${{ matrix.adapter }} --full-refresh
-      - name: version guard sequence — delta + version bump (real warehouse)
-        # Sequential runs to exercise version_guard's delta vs. reprocess-all paths on the real
-        # warehouse (the full-refresh build above only covers the first build). v1 again = delta;
-        # v2 = version bump = reprocess all. Selected by tag so it works across adapters.
-        run: |
-          dbt build --project-dir integration_tests/cloud --target ${{ matrix.adapter }} \
-            --select tag:version_guard --vars '{test_version: v1}'
-          dbt build --project-dir integration_tests/cloud --target ${{ matrix.adapter }} \
-            --select tag:version_guard --vars '{test_version: v2}'

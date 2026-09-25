@@ -11,7 +11,7 @@ results. Testing posture: structure-only for cloud AI, full deterministic execut
 |---|---|---|---|---|
 | **Structure** | `integration_tests/cloud` (all 3 targets) | no | every macro/model/test **renders** the right per-dialect SQL (`dbt parse`, no warehouse connection) | CI `structure` job, on every PR |
 | **Deterministic** | `integration_tests/duckdb` | no | everything that doesn't need a cloud AI service is **executed and asserted** on a local duckdb | CI `deterministic-tests` job, on every PR; run it locally too |
-| **Live battery** | `integration_tests/cloud` (`--target snowflake/databricks/bigquery`) | **yes** | the wrappers + evaluation + accessors actually **run on the real warehouse** and return sane results | CI `live-battery` job — **opt-in**, manual `workflow_dispatch` only |
+| **Live battery** | `integration_tests/cloud` (`--target snowflake/databricks/bigquery`) | **yes** | the wrappers + evaluation + accessors actually **run on the real warehouse** and return sane results | **not in CI**. Run locally by following §4.11's cloud pass |
 
 The rule of thumb: **duckdb proves the logic; the live battery proves the dialect + the model
 actually works.** A green PR only requires the first two (no credentials). The live battery is how
@@ -33,12 +33,16 @@ mkdir -p target   # duckdb writes its file relative to CWD; ensure the dir exist
 dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb --full-refresh
 ```
 
-Expected result: **`Done. PASS=63 WARN=0 ERROR=0 SKIP=0`** (count grows as tests are added).
+Expected result: **`Done. PASS=201 WARN=0 ERROR=0 SKIP=0`**, verified 2026-09-24. The count grows
+as tests are added, so treat the run summary as the source of truth rather than this number.
 
-> ⚠️ **Always pass `--full-refresh`.** `ai_run_log` is an *append-only incremental* model, so a
-> second plain `dbt build` appends another log row and `assert_run_log` (which expects exactly one)
-> fails. `--full-refresh` resets the log. A "1 error: assert_run_log got 1 result" after a repeat
-> run is this, not a real regression.
+> ⚠️ **Always pass `--full-refresh`.** Several tests are phase-parameterized and read their
+> baseline from a freshly built table. A second plain `dbt build` over an already-populated
+> database fails `assert_logged_delta`, `assert_content_hash_delta`, and `assert_chunk_fp_probe`,
+> because each reads a 0-row delta instead of its baseline (verified 2026-09-25: `199 total |
+> 196 success | 3 error` on Fusion, `PASS=198 ERROR=3 TOTAL=201` on Core, the same three tests).
+> This is the repeat-build artifact, not a regression. `--full-refresh` resets them. All three
+> duckdb CI jobs pass the flag for this reason rather than relying on a clean runner.
 
 ### Verify the circuit breaker actually trips (credential-free)
 
@@ -102,13 +106,29 @@ README.
 ```bash
 # per warehouse (example: bigquery)
 dbt deps  --project-dir integration_tests/cloud
-dbt build --project-dir integration_tests/cloud --target bigquery --full-refresh
+dbt build --project-dir integration_tests/cloud --target bigquery --full-refresh \
+  --vars '{ai_functions_enabled: true}'
 ```
 
-Or trigger all three in CI: `gh workflow run ci.yml` (the `live-battery` job; needs the repo secret
-`DBT_PROFILES_YML` holding the merged profile).
+> **Why every cloud command here carries `--vars '{ai_functions_enabled: true}'`.**
+> AI functions are off unless you switch them on (ADR-0030). This project leaves them off on
+> purpose, so cloning the repo and running `dbt build` cannot spend money by accident. You switch
+> them on one command at a time, which keeps the cost opt-in visible in the command that spends.
+> If you forget the flag, the build stops with a compiler error naming the variable. That is
+> working as intended, not a bug.
+>
+> **Do not move this setting into `dbt_project.yml`.** Writing a computed value there, such as
+> `"{{ 'true' if target.name == 'prod' else 'false' }}"`, does not do what it looks like it does.
+> dbt hands the gate the *text* `"false"` instead of a real false, and the gate treats any
+> non-empty text as "on". A line written to allow AI in prod only would allow it everywhere. A
+> plain `true` does work, but it re-opens the accident this project is avoiding.
 
-Expected result: all models build and all **13** `assert_*` tests pass. A failure here is meaningful
+There is no CI job for this. The cloud suite runs locally, against your own profile, by following
+§4's cloud pass.
+
+Expected result: all models build and all **32** `assert_*` tests pass, for
+`TOTAL=144` per target (verified 2026-09-25 on Snowflake, Databricks, and BigQuery, under both
+dbt Core and dbt Fusion). A failure here is meaningful
 — it means a wrapper's dialect is wrong for that account, a model returned nothing, or the AI
 produced an off-taxonomy / ungrounded result. See §5.
 
@@ -121,24 +141,26 @@ big `dbt build`:
 P="--project-dir integration_tests/cloud --target bigquery"   # or --target snowflake / databricks
 
 # 1) Deterministic first — no AI, proves connectivity + the eval/guard SQL on the real engine.
+#    No $AI needed: nothing here reaches an AI wrapper.
 dbt build $P --full-refresh --select eval_metrics assert_eval_metrics \
   assert_grounded assert_conforms_catches
 
 # 2) One cheap AI call — proves the model var / endpoint / prerequisite are right before spending more.
-dbt build $P --select generate assert_wrappers_nonnull
+dbt build $P --vars '{ai_functions_enabled: true}' --select generate assert_wrappers_nonnull
 
 # 3) The rest of the battery.
-dbt build $P --full-refresh
+dbt build $P --vars '{ai_functions_enabled: true}' --full-refresh
 
-# 4) Version guard needs sequential runs (see §4.1).
-dbt build $P --select tag:version_guard --vars '{test_version: v1}'
-dbt build $P --select tag:version_guard --vars '{test_version: v2}'
+# 4) Version guard needs sequential runs (see §4.1). No AI wrappers on this path.
+dbt build $P --indirect-selection cautious --select tag:version_guard --vars '{test_version: v1}'
+dbt build $P --indirect-selection cautious --select tag:version_guard --vars '{test_version: v2}'
 ```
 
 What a clean warehouse pass looks like: every model `OK`, every test `PASS`, and the run log holds a
 `classify` row with `row_count = 10`. Read any failure by its first-column label against the table in
 §5. The **most likely first-run issues** are (a) a wrong `model_*` / embedding var for the account,
-(b) an unmet prerequisite (Databricks needs a **serverless** warehouse + DBR 18.2+; BigQuery needs the
+(b) an unmet prerequisite (Databricks needs **DBR 15.4 LTS or above** and is not available on
+Databricks SQL Classic; BigQuery needs the
 AI API enabled), and (c) on BigQuery, a null `signal`/`evidence` in `assert_*_conforms` (run with
 `--target bigquery`) → the STRUCT field-access assumption needs adjusting (ping me with the row and I'll
 fix the one line).
@@ -154,6 +176,7 @@ fix the one line).
 | Chunking | `chunk_utterances`, `chunk_docs`, `chunk_overlap`, `split_docs` | `assert_expected_boundaries`, `assert_soft_cap`, `assert_lineage_exactly_once`, `assert_overlap_boundaries`, `assert_overlap_coverage`, `assert_sentence_split` + `unique`/`not_null` |
 | Prompts | `render_prompt_test`, `augment_test` | `assert_render_prompt`, `assert_augment_prompt` (enum injection) |
 | Cost guard | `guard_pass` | `not_null` + the §2 trip check |
+| Cost guard, per-group (`guard_agg_batch`) | `guard_agg_pass` | pass path on every build; the trip path is a CI step at `max_agg_group_tokens: 1` |
 | Run log | `logged_model`, `ai_run_log` | `assert_run_log` |
 | Run log (incremental delta, multi-run) | `logged_delta` | `assert_logged_delta` via the multi-run CI step (§4.2) |
 | Version guard | `versioned` | `assert_versioned` |
@@ -161,6 +184,25 @@ fix the one line).
 | Knowledge base | `kb`, `kb_search`, `source_tickets`, `source_calls` | `assert_knowledge_base`, `assert_kb_search` |
 | **Evaluation (P7)** | `eval_predictions`, `eval_metrics` | `assert_eval_metrics`, `assert_grounded`, `assert_conforms`, `assert_conforms_catches`, `grounded` generic test |
 | **Output accessors** | `flatten_test` | `assert_flatten`, `assert_flatten_conforms` |
+| Cost guard (incremental delta, multi-run) | `guard_delta` | `assert_guard_delta` via the CI trip/scope steps (§2) |
+| Run log (static filter) | `logged_filtered` | `assert_log_filtered` |
+| Run completion (never-completed stays false) | `logged_never_completed` | `assert_never_completed_stays_false` |
+| Version guard (adoption of a column-less table) | `vg_adopt` | `assert_vg_adopt` via the multi-run CI step (§4.10) |
+| Retrieval (deterministic tiebreak) | `search_ties_corpus`, `search_ties_results` | `assert_vector_search_tiebreak` |
+| Embedding metadata (content-hash delta, multi-run) | `content_hash_delta_stg`, `content_hash_delta` | `assert_content_hash_delta` (§4.3) |
+| Chunk fingerprint no-op (multi-run) | `chunk_fp_probe_*` chain | `assert_chunk_fp_probe` (§4.9) |
+| Chunk partition delta (multi-run) | `chunk_delta`, `chunk_delta_units` | `assert_chunk_delta` (§4.5) |
+| Metadata attach + delta | `chunk_metadata_cols`, `chunk_metadata_text`, `chunk_metadata_utterances`, `attach_metadata_delta`, `attach_metadata_delta_meta_stg`, `amd_null_meta*` | `assert_metadata_*`, `assert_attach_metadata_delta` (§4.6), `assert_amd_null_meta` (§4.8) |
+| Knowledge base (per-arm delta, multi-run) | `kb_delta`, `kb_delta_*_stg` | `assert_kb_delta` (§4.7) |
+| chunk_id orphaning (multi-run, expected failure) | `orphan_chunks`, `orphan_embeddings`, `orphan_amd`, `orphan_kb*` | `relationships` tests (§4.4) |
+| **Embedding canary (ADR-0026)** | `embedding_canary` (package model, `monitoring: +enabled: true`) + `embedding_canary_baseline` seed | `assert_embedding_canary_matches_baseline`, severity `warn` here (the duckdb probe compares a fixed stand-in against itself, similarity 1.0) |
+| Canary calibration | `canary_calibration` | `assert_canary_calibration_sensitivity` (checks `canary_cosine_similarity` against known similarities) |
+| Oversized-chunk test (`no_oversized_chunks`) | `chunk_sized` | the generic test itself, passing at the default target; a CI step re-runs it at `sized_target_tokens: 3` and requires it to fail |
+| Dev-mode sampling (`dev_sample_filter`) | `sample_filtered` | `assert_dev_sample_filter`, full corpus on a normal build and a CI step at `ai_sample_rows: 4` |
+| Embedding logic hash as an audit column (ADR-0025) | `embedding_canary` | `assert_embedding_logic_hash_lands` + `not_null` |
+| Safety-gate raise paths | `probe_ai_gate`, `probe_view_gate`, `probe_full_refresh_gate` (disabled unless their `gate_probe` var selects them) | CI steps only, each matching the gate's error message rather than inverting an exit code |
+| `create_vector_index` (no warehouse) | none (run-operation only) | `assert_create_vector_index_ddl` for the Snowflake and BigQuery DDL text, plus the three `probe_create_vector_index_*` raise probes. All CI steps |
+| Canary re-bless serializer | `embedding_canary` | `assert_canary_vector_roundtrip`, plus a CI step running `print_embedding_canary` itself |
 
 ### `integration_tests/cloud` (`--target snowflake` / `databricks` / `bigquery`) — real warehouse
 
@@ -180,6 +222,19 @@ conditionals in `dbt_project.yml`.
 | Version guard | `versioned` (incremental, no AI; tag `version_guard`) | `assert_versioned` via the multi-run CI step (§4.1) | deterministic |
 | **Evaluation (P7)** | `eval_metrics` (no AI) | `assert_eval_metrics`, `assert_grounded`, `assert_conforms_catches` | deterministic |
 | **Output accessors** | `flatten` (from `generate`), `generate_text` (LIVE) | `assert_flatten_conforms`, `assert_generate_text` | live |
+| **Group-level aggregation (ADR-0028)** | `ai_agg` (LIVE), guarded by `guard_agg_batch` in a pre_hook | `assert_ai_agg` | live |
+| **Adversarial fixtures** | `adversarial_docs`, `split_adversarial`, `signals_adversarial` (LIVE) | `assert_split_adversarial`, `assert_signals_adversarial` | live + deterministic |
+| Embedding metadata (content-hash delta, multi-run) | `content_hash_delta_stg`, `content_hash_delta` | `assert_content_hash_delta` (§4.3) | deterministic |
+| Chunk partition delta (multi-run) | `chunk_delta`, `chunk_delta_units` | `assert_chunk_delta` (§4.5) | deterministic |
+| Metadata attach + delta | `chunk_metadata_cols`, `chunk_metadata_text`, `chunk_metadata_utterances`, `attach_metadata_delta`, `attach_metadata_delta_meta_stg`, `amd_null_meta*` | `assert_metadata_*`, `assert_attach_metadata_delta` (§4.6), `assert_amd_null_meta` (§4.8) | deterministic |
+| Knowledge base (per-arm delta, multi-run) | `kb_delta`, `kb_delta_*_stg` | `assert_kb_delta` (§4.7) | deterministic |
+| chunk_id orphaning (multi-run, expected failure) | `orphan_chunks`, `orphan_embeddings`, `orphan_amd`, `orphan_kb*` | `relationships` tests (§4.4) | deterministic |
+| **Embedding canary (ADR-0026)** | `embedding_canary` (package model, `monitoring: +enabled: true`) + `embedding_canary_baseline` seed, makes a real `embed()` call | `assert_embedding_canary_matches_baseline`, severity raised to `error` in this project | live |
+| Oversized-chunk test (`no_oversized_chunks`) | `chunk_sized` | the generic test itself (parity with duckdb; the trip path is exercised on duckdb only, since the test is engine-independent SQL) | deterministic |
+| Dev-mode sampling (`dev_sample_filter`) | `sample_filtered` | `assert_dev_sample_filter`. The point on a warehouse is portability: this is where the emitted `QUALIFY` is proven to parse on Snowflake, Databricks, and BigQuery | deterministic |
+| Groundedness generic test (`grounded`) | `extract_flat` | the `grounded` wrapper itself, `allow_empty: true`. `assert_extract_grounded` alongside it checks the same property by calling the internals directly, so the pair covers both the internals and the wrapper a consumer writes | live |
+| Embedding logic hash as an audit column (ADR-0025) | `embedding_canary` | `assert_embedding_logic_hash_lands` + `not_null` | deterministic |
+| Canary re-bless serializer | `embedding_canary` | `assert_canary_vector_roundtrip`. This is where each engine's own `canary_vector_to_json` is proven to round-trip a real vector, which is what a pasted baseline depends on | live |
 
 ### 4.1 The multi-run version-guard step
 
@@ -508,6 +563,130 @@ delta/metering plumbing (does `log_ai_run`'s `row_count` correctly read zero whe
 rebuilds a partition but `chunk_text` doesn't change), not `embed()`'s own AI behavior, so no AI
 spend or cloud warehouse is needed to verify it.
 
+### 4.10 version_guard adopting a pre-existing table with no version column
+
+Automated in CI (`deterministic-tests`), documented here because §4 never described it. The
+first `version_guard` run against a table that predates the version column used to raise
+"column does not exist". The fix detects the missing column, reprocesses every row, and stamps
+the version. duckdb only: this is `get_columns_in_relation` behavior, engine-agnostic, so a
+cloud copy would test the same code path twice.
+
+```bash
+dbt run --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+  --select vg_adopt --full-refresh --vars '{vg_legacy: true}'
+# ^ builds vg_adopt in the LEGACY shape, with no model_version column.
+dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+  --indirect-selection cautious \
+  --select vg_adopt assert_vg_adopt --vars '{vg_legacy: false, vg_ver: v1}'
+# ^ first guarded run against that table: must succeed and stamp v1 on every row.
+```
+
+A non-zero exit on the second command means the adoption path regressed. `assert_vg_adopt` then
+pins the stamped result.
+
+---
+
+### 4.11 The full validation passes, in order
+
+§4.1 through §4.10 each describe one sequence in isolation. This section is the order to run
+them in, what state each assumes, and how to get back to a clean baseline. There is no runner
+script. This is a procedure a person executes.
+
+**Two passes, not one.** §4.2 (`logged_delta`) and §4.9 (the `chunk_fp_probe_*` chain) have no
+cloud counterpart, so the cloud pass is genuinely shorter. That is a tier difference, not an
+omission. §4.8 appears in neither pass: it describes a fixture and its edge case, and has no
+sequence to run. §4.10 is duckdb-only for the same reason as §4.2 and §4.9.
+
+**Every selective step carries `--indirect-selection cautious`.** Without it dbt's default
+*eager* selection pulls in singular tests whose models the step never built, and they fail for
+reasons unrelated to what the step is testing. On duckdb, the §4.3 selection drags in five such
+tests. Adding `cautious` reduces it to one. On the cloud targets the same selection fails
+`assert_run_log` with `Got 2 results`. Do not drop the flag.
+
+Set these once per pass:
+
+```bash
+# duckdb pass
+DBT=integration_tests/duckdb/.venv/bin/dbt
+D="--project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb"
+```
+
+```bash
+# cloud pass
+DBT=integration_tests/cloud/.venv/bin/dbt   # Fusion: DBT=dbtf
+C="--project-dir integration_tests/cloud --target snowflake"   # repeat for databricks, bigquery
+```
+
+Every cloud step that reaches an AI wrapper also needs `--vars '{ai_functions_enabled: true}'`
+(§3.3). It is written out in full below rather than hidden behind a variable, so no step can be
+copied without the opt-in visible.
+
+Use the per-project venvs rather than a global `dbt`. A global binary on a dev machine may be
+Fusion, which changes what you are testing without saying so.
+
+#### duckdb pass (free, no credentials)
+
+| # | Step | Assumes | Pass looks like |
+|---|---|---|---|
+| 1 | Full-refresh baseline: `$DBT build $D --full-refresh` | anything | `PASS=201` |
+| 2 | §4.1 version guard, v1 then v2 | step 1 | both runs green |
+| 3 | §4.10 `vg_adopt` adoption | step 1 | second run green, v1 stamped |
+| 4 | §4.2 `logged_delta` phase 2 | step 1 | `row_count = 5` |
+| 5 | §4.3 content-hash delta phase 2 | a *fresh* step 1 | `row_count = 1` |
+| 6 | §4.5 chunk partition delta phase 2 | step 1 | per §4.5 |
+| 7 | §4.6 attach_metadata delta phase 2 | step 1 | per §4.6 |
+| 8 | §4.7 knowledge_base per-arm delta phase 2 | step 1 | per §4.7 |
+| 9 | §4.9 chunk fingerprint bump | step 1 | embed `row_count = 0` |
+| 10 | §4.4 orphan sequence | step 1 | the `relationships` test **FAILS** with `Got 6 results` |
+| 11 | **Cleanup rebuild (mandatory)** | step 10 | see below |
+
+Steps 2 and 3 are also run by CI (`deterministic-tests`), so by hand they are a duplicate. Run
+them anyway when validating a change to `version_guard` itself.
+
+**Each phase-2 step consumes its delta.** Running step 5 twice without re-establishing the
+baseline in between fails `assert_content_hash_delta` with `row_count = 0`, which reads exactly
+like a real defect and is not one. If you need to repeat a phase-2 step, re-run its own baseline
+command first.
+
+**Step 11, the cleanup, is not optional.** Step 10 deliberately strands rows and leaves the
+database inconsistent:
+
+```bash
+$DBT build $D --indirect-selection cautious --full-refresh \
+  --select orphan_chunks orphan_embeddings --vars '{oc_target_tokens: 20}'
+$DBT build $D --full-refresh          # back to PASS=201
+```
+
+#### cloud pass (real AI calls, run once per target)
+
+| # | Step | Assumes | Pass looks like |
+|---|---|---|---|
+| 1 | Full-refresh baseline: `$DBT build $C --full-refresh --vars '{ai_functions_enabled: true}'` | anything | `TOTAL=144`, ideally `PASS=144` |
+| 2 | §4.1 version guard, v1 then v2 | step 1 | both runs green |
+| 3 | §4.3 content-hash delta phase 2 | a *fresh* step 1 | `row_count = 1` |
+| 4 | §4.5 chunk partition delta phase 2 | step 1 | per §4.5 |
+| 5 | §4.6 attach_metadata delta phase 2 | step 1 | per §4.6 |
+| 6 | §4.7 knowledge_base per-arm delta phase 2 | step 1 | per §4.7 |
+| 7 | §4.4 orphan sequence | step 1 | the `relationships` test **FAILS** |
+| 8 | **Cleanup rebuild (mandatory)** | step 7 | `TOTAL=144` again |
+
+§4.1's cloud half used to run in a CI job. That job is gone (it never once executed and depended
+on a repo secret that never existed), so this pass is now the only thing covering it.
+
+On step 1, a `PASS=131 ERROR=3` on Snowflake with `assert_wrappers_nonnull`,
+`assert_extract_conforms`, and `assert_flatten_conforms` failing together is the transient null
+described in §5, not a regression. Rebuild and re-test before investigating.
+
+Cleanup for step 8 mirrors the duckdb one, then a full rebuild:
+
+```bash
+$DBT build $C --indirect-selection cautious --full-refresh \
+  --select orphan_chunks orphan_embeddings --vars '{oc_target_tokens: 20}'
+$DBT build $C --full-refresh --vars '{ai_functions_enabled: true}'
+```
+
+The pass is complete when the final rebuild is clean. Do not leave a warehouse mid-sequence.
+
 ---
 
 ## 5. What to look out for in the results
@@ -523,7 +702,7 @@ column names the problem (e.g. `wrong_top_hit`, `bad_accuracy`, `extract_null`).
 | `assert_search` (LIVE) | 0 rows | `wrong_count` ≠ 3 → `top_k`/`VECTOR_SEARCH` wiring off (watch **BigQuery's** divergent table-function path). `not_descending` → ordering/score sign wrong (BigQuery uses `1 - distance`). `score_out_of_range` → not cosine. `wrong_top_hit` → the near-identical utterance didn't rank #1 → **embedding quality / wrong embedding model**, or query embedded with a different model than the corpus. |
 | `assert_flatten_conforms` (LIVE) | 0 rows | A row = the flattened `signal` is null or off-taxonomy. Null → `field` path wrong for this engine's output shape (VARIANT `:` / STRUCT `.` / JSON `get_json_object`). Off-taxonomy value → the model ignored the schema (most likely on **BigQuery**, where the enum is prompt-constrained only, not schema-enforced). |
 | `assert_generate_text` (LIVE) | 0 rows | Empty/null text → `text` didn't extract the payload — watch **BigQuery's** `(...).result` struct access. |
-| `assert_wrappers_nonnull` (LIVE) | 0 rows | `<wrapper>_null` → that wrapper returned nothing on this account (bad endpoint/model var, content filter, unsupported warehouse tier). Cross-check the model var and the prerequisite (Databricks serverless / DBR 18.2+). |
+| `assert_wrappers_nonnull` (LIVE) | 0 rows | `<wrapper>_null` → that wrapper returned nothing on this account (bad endpoint/model var, content filter, unsupported warehouse tier). Cross-check the model var and the prerequisite (Databricks: DBR 15.4 LTS+, not on SQL Classic). **On Snowflake a null can also be transient**: see the note below this table. |
 | `assert_signals_conform` (LIVE) | 0 rows | A row = `classify`'s normalized scalar label is null or off-taxonomy. Null → the per-engine unwrap is wrong (Snowflake `:labels[0]` / BigQuery `.<field>`) — see §6. Off-taxonomy → the model ignored the label set. |
 | `assert_extract_conforms` (LIVE) | 0 rows | A row = the flattened extract `signal` is null or off-taxonomy. Null → the `field` path is wrong for this engine's extract shape (Snowflake's `:response` envelope is unwrapped in the wrapper; if BigQuery returns null, its STRUCT field access is wrong). |
 | `assert_extract_grounded` (LIVE, behavioral) | 0 rows | A row = the model returned an evidence quote that is **not** in the source utterance (a hallucinated quote). This surfaces real extraction quality — it can legitimately fail if the model paraphrases instead of quoting verbatim; investigate the row before assuming a code bug. |
@@ -535,10 +714,35 @@ column names the problem (e.g. `wrong_top_hit`, `bad_accuracy`, `extract_null`).
 | `relationships_orphan_embeddings_chunk_id__...` (duckdb, multi-run, §4.4) | 0 rows normally; **expected to fail** after the deliberate re-chunk step | This is the one test in this file meant to fail on command. If it *doesn't* fail after §4.4's steps, the relationships test isn't actually catching the orphan. |
 | circuit-breaker trip (§2) | **non-zero exit** | If it exits 0, `guard_batch` failed to raise over the ceiling. |
 
+> **Snowflake only: a transient null from `generate` and `extract`.**
+>
+> About one Snowflake build in ten, `generate` and `extract` return null for a few rows. The
+> models themselves still report `SUCCESS 10`, so the build looks fine. Three tests then fail
+> together: `assert_wrappers_nonnull`, `assert_extract_conforms`, and `assert_flatten_conforms`.
+>
+> Those three failures are one event, not three. `extract_flat` is built from `extract`, and
+> `flatten` is built from `generate`, so the same nulls are caught three times.
+>
+> **How to recognize it.** The row count on `assert_wrappers_nonnull` equals the other two added
+> together. Seen four times so far: 3=2+1, 4=1+3, 4=3+1, 5=2+3. Twice the failing rows were read
+> directly, and both times they held only `extract_null` and `generate_null`, never
+> `classify_null` or `embed_null`. The affected row ids change every time, so no particular
+> fixture text is causing it.
+>
+> **What to do.** Rebuild the models, then run the tests again. Running `dbt test` on its own
+> tells you nothing, because it re-reads the output already stored in the table and fails the
+> same way. The nulls happen when the model is built. A clean rebuild means it was this. The
+> same rows failing again means it was not.
+>
+> **Why this is not in §6's list of tests that fail from model nondeterminism.** A null means
+> the call silently failed, and catching that is the whole reason `assert_wrappers_nonnull`
+> exists. Filing it as expected noise would teach people to ignore a real signal. Not seen on
+> Databricks or BigQuery, where 25 consecutive rebuilds of these models were clean (2026-09-24).
+
 General cloud red flags: an opaque SQL error at build (not a clean `*` compiler error) usually
-means an **unmet prerequisite** — Databricks on a Classic/Pro warehouse (needs serverless / DBR
-18.2+; the runtime check is a documented no-op today), or a BigQuery project without the AI API
-enabled.
+means an **unmet prerequisite**: Databricks on a SQL Classic warehouse or below DBR 15.4 LTS
+(the runtime check is a documented no-op today, so this surfaces as an opaque SQL error rather
+than a named one), or a BigQuery project without the AI API enabled.
 
 ---
 
@@ -546,17 +750,36 @@ enabled.
 
 What remains uncovered or conditional (everything else is now covered on all three warehouses):
 
-- **`create_vector_index`** — run-operation only; creates external, billed objects. **Deliberately
-  excluded** from the suite (`LIVE-VALIDATION DEFERRED`).
-- **The cloud suite is opt-in.** It runs only on manual `workflow_dispatch` (or locally against a
-  profile), never on PR/push. On a normal change, the cloud AI paths are **parsed, not executed** —
-  continuous coverage is the duckdb layer; cloud is validated on demand (that's what you're about to do).
+- **`create_vector_index`, the live half.** Run-operation only, and it creates external, billed
+  objects, so an actual create-and-drop cycle on Snowflake and BigQuery stays out of the suite
+  (`LIVE-VALIDATION DEFERRED`). The other three implementations are covered without one:
+  `default__` and `databricks__` raise, and the Snowflake and BigQuery DDL strings are asserted
+  as assembled text by `assert_create_vector_index_ddl`. That proves every argument is
+  interpolated and the optional clauses appear and disappear with their arguments. It does not
+  prove either warehouse accepts the DDL.
+- **The Databricks runtime prerequisite is documented but unenforced.**
+  `require_databricks_ai_runtime()` has an empty body. The real requirement is DBR 15.4 LTS or
+  above and not Databricks SQL Classic. Enforcing it needs a `current_version()` round trip at
+  compile time on every AI-calling model, which is a cost and a design decision, and it cannot be
+  validated without a Databricks warehouse. Until then an unmet prerequisite is an opaque SQL
+  error rather than a named one.
+- **The cloud suite never runs in CI.** It runs only locally, against your own profile, by
+  following §4.11's cloud pass. A `live-battery` job existed until it was deleted: it was gated
+  on `workflow_dispatch`, was never once dispatched across 54 recorded runs, and depended on a
+  repo secret that was never created, so it had never executed. On a normal change the cloud AI
+  paths are **parsed, not executed**, and continuous coverage is the duckdb layer.
 - **Some live tests are behavioral, not deterministic gates.** `assert_search` (top-hit ranking),
   the `*_conforms_*` checks, and `assert_extract_grounded` depend on live model output, so they can
   fail from model nondeterminism rather than a code bug. Read a failing row before assuming a regression.
 - **BigQuery classify/extract STRUCT field access is assumed-from-docs** (Snowflake + Databricks
   shapes are confirmed as of 2026-07-29). `assert_signals_conform` / `assert_extract_conforms` (on `--target bigquery`)
   are the confirmation — a **null** result means the `.<field>` path is wrong for BigQuery.
+- **Drift detection is bounded by how often someone runs the cloud pass.** `embedding_canary`
+  finds provider drift by comparing runs spaced apart in time, and nothing runs it on a
+  schedule: no CI job reaches a warehouse, the repository holds no Actions secrets, and adding
+  them plus a scheduled workflow was decided against. A vendor changing a pinned model's output
+  is therefore invisible until the next manual cloud pass. This is a constraint on how the
+  capability is operated here, not a gap in the suite or in ADR-0026's design.
 - **BigQuery Vertex key casing** (`generationConfig`/`thinkingConfig`) — re-confirm on the first live
   BigQuery run.
 - **`cost_reconciliation`** — **removed** (2026-07-29); can be re-added later over `ai_run_log`.
@@ -583,9 +806,41 @@ What remains uncovered or conditional (everything else is now covered on all thr
 - `log_ai_run` INSERT asserted on cloud (`assert_run_log`).
 - `version_guard` delta and bump run on all three warehouses (§4.1).
 - Content-hash delta and chunk_id orphaning run on all three warehouses (§4.3, §4.4).
+- **The safety gates' raise paths.** `require_ai_functions_enabled`,
+  `require_safe_materialization` and `require_full_refresh_gate` are wired into all five AI
+  wrappers and none of them had a test on the raising side. Each now has a CI step that matches
+  the gate's error message, plus a positive control proving the other three fail because of the
+  gate rather than because duckdb cannot embed.
+- **`require_ai_functions_enabled` failed open on a string.** The gate tested truthiness, and
+  every non-empty string is truthy in Jinja, so `ai_functions_enabled: "false"` opened it. Jinja
+  in `dbt_project.yml` renders into the YAML text before parsing and has to be quoted, which
+  means the natural per-target form, `"{{ 'true' if target.name == 'prod' else 'false' }}"`,
+  permitted spend on every non-prod target. The gate now normalizes to text and compares, and an
+  unrecognized value raises instead of reading as off.
+- **`guard_agg_batch`'s trip path**, which needed a warehouse to execute at all: its only caller
+  was a pre-hook on the cloud `ai_agg` model. `guard_agg_pass` covers the pass path on duckdb
+  every build and a CI step covers the raise.
+- **Shipped-but-uncalled code.** `no_oversized_chunks` and `grounded` are attached in the
+  integration projects; `dev_sample_filter` has a caller and a row-count assertion;
+  `print_embedding_canary` runs, and `assert_canary_vector_roundtrip` proves each engine's
+  `canary_vector_to_json` serializes a real vector back into something the comparison parses;
+  `embedding_logic_hash()` is emitted as the audit column ADR-0025 describes and asserted to
+  land. `require_bq_model` was deleted rather than tested: nothing called it, and the README
+  already states `bq_connection` is optional and the `AI.*` functions need no `CREATE MODEL`.
+- **The `embedding_logic_hash` call-graph walk missed bare `adapter.dispatch`.** ADR-0025 built
+  the walk on the claim that every macro call is package-qualified. `chunk.sql` reaches
+  `array_agg` and `string_agg` bare, so those edges were invisible. The walk now follows both,
+  lives in `ci/macro_call_graph.py`, and has its own tests in `ci/test_macro_call_graph.py`.
+- **The floor jobs were not testing a floor.** They pinned `dbt-core==1.11.0` but left the
+  adapter unpinned, and adapters depend on `dbt-adapters` rather than a pinned core, so pip
+  resolved a 1.12.x adapter on top of 1.11.0 core, a combination nobody ships. The adapters are
+  pinned to 1.11.0 too.
+- **`dbt_utils` was declared and never used.** No macro in the package called it, so the
+  declaration was imposing a transitive install and a `<2.0.0` constraint on every consumer for
+  nothing. Removed from `packages.yml`.
 
 **Adversarial cloud coverage, added 2026-08-10,** on all three warehouses (`LIVE-VALIDATION
-DEFERRED` until the next live-battery run):
+DEFERRED` until the next cloud pass):
 
 - `split_sentences` **cross-engine boundary parity** against a golden set
   (`assert_split_adversarial`, catching the Snowflake divergence #7).
@@ -616,6 +871,8 @@ dbt build --project-dir integration_tests/duckdb --profiles-dir integration_test
 # Structure gate for a cloud dialect (no creds; renders per-dialect SQL)
 dbt parse --project-dir integration_tests/cloud --profiles-dir ci --target bigquery
 
-# Live battery on a real warehouse (needs ~/.dbt profile; costs money)
-dbt build --project-dir integration_tests/cloud --target bigquery --full-refresh
+# Live battery on a real warehouse (needs ~/.dbt profile; costs money).
+# The --vars flag is the spend gate opt-in and is required; see §3.3.
+dbt build --project-dir integration_tests/cloud --target bigquery --full-refresh \
+  --vars '{ai_functions_enabled: true}'
 ```

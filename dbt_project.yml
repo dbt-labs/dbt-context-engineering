@@ -96,8 +96,13 @@ vars:
   # baseline rows on any model change, so a mismatched value here surfaces as a cast error rather
   # than a silently wrong comparison.
   embedding_canary_vector_dimension: 768
-  # warn in prod (a benign wobble should not fail a scheduled build); CI overrides this to
-  # 'error' so a PR cannot merge past real drift.
+  # 'warn' is the shipped default: a benign live wobble should not fail a consumer's scheduled
+  # build. integration_tests/cloud raises it to 'error', where the canary compares a real
+  # embedding against a blessed baseline. Nothing in CI overrides it, and nothing can: CI never
+  # reaches a warehouse. The two drift mechanisms are deliberately split (ADR-0026 "complements,
+  # does not replace" ADR-0025). Package-code drift in embed()'s closure is blocked at error by
+  # the embedding-logic-hash job. This canary covers provider-side drift, meaning a vendor
+  # changing a pinned model's output with no package change.
   embedding_canary_test_severity: warn
 
 models:

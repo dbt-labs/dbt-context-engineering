@@ -37,14 +37,26 @@
 {%- endmacro %}
 
 
-{#- duckdb (also the credential-free default): regexp_extract_all + UNNEST WITH ORDINALITY. -#}
+{#- duckdb (also the credential-free default): regexp_extract_all, then two parallel UNNESTs.
+    duckdb zips multiple UNNEST calls in one SELECT element-by-element, so unnesting the matches
+    alongside range(1, n+1) yields the same (sentence, 1-based index) pairing as WITH ORDINALITY.
+
+    Written this way rather than `UNNEST(...) WITH ORDINALITY AS u(text, idx)`, which duckdb
+    accepts but dbt Fusion's parser rejects with SyntaxInvalid (dbt0101), "no viable alternative
+    at input ... with ordinality as". Fusion runs the SQL anyway today, so that was a warning
+    rather than a failure, but the default split path is not a good thing to leave depending on a
+    parser accepting something it reports as invalid. -#}
 {% macro default__split_sentences_core(relation, id_column, text_column) -%}
     select
-        {{ id_column }} as document_id,
-        u.sentence_index as sentence_index,
-        trim(u.sentence_text) as sentence_text
-    from {{ relation }},
-         unnest(regexp_extract_all({{ text_column }}, '[^.!?]+[.!?]*')) with ordinality as u(sentence_text, sentence_index)
+        document_id,
+        unnest(range(1, len(_ce_parts) + 1)) as sentence_index,
+        trim(unnest(_ce_parts)) as sentence_text
+    from (
+        select
+            {{ id_column }} as document_id,
+            regexp_extract_all({{ text_column }}, '[^.!?]+[.!?]*') as _ce_parts
+        from {{ relation }}
+    ) _ce_src
 {%- endmacro %}
 
 

@@ -12,6 +12,7 @@ results. Testing posture: structure-only for cloud AI, full deterministic execut
 | **Structure** | `integration_tests/cloud` (all 3 targets) | no | every macro/model/test **renders** the right per-dialect SQL (`dbt parse`, no warehouse connection) | CI `structure` job, on every PR |
 | **Deterministic** | `integration_tests/duckdb` | no | everything that doesn't need a cloud AI service is **executed and asserted** on a local duckdb | CI `deterministic-tests` job, on every PR; run it locally too |
 | **Live battery** | `integration_tests/cloud` (`--target snowflake/databricks/bigquery`) | **yes** | the wrappers + evaluation + accessors actually **run on the real warehouse** and return sane results | **not in CI**. Run locally by following §4.11's cloud pass |
+| **Coverage matrix** | whole package | no | every dispatched macro implementation is reached by a real build, a direct probe, or a declared exception; nothing ships silently uncovered | CI `coverage-matrix` job, on every PR |
 
 The rule of thumb: **duckdb proves the logic; the live battery proves the dialect + the model
 actually works.** A green PR only requires the first two (no credentials). The live battery is how
@@ -33,14 +34,14 @@ mkdir -p target   # duckdb writes its file relative to CWD; ensure the dir exist
 dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb --full-refresh
 ```
 
-Expected result: **`Done. PASS=201 WARN=0 ERROR=0 SKIP=0`**, verified 2026-09-24. The count grows
+Expected result: **`Done. PASS=206 WARN=0 ERROR=0 SKIP=0`**, verified 2026-09-25. The count grows
 as tests are added, so treat the run summary as the source of truth rather than this number.
 
 > ⚠️ **Always pass `--full-refresh`.** Several tests are phase-parameterized and read their
 > baseline from a freshly built table. A second plain `dbt build` over an already-populated
 > database fails `assert_logged_delta`, `assert_content_hash_delta`, and `assert_chunk_fp_probe`,
 > because each reads a 0-row delta instead of its baseline (verified 2026-09-25: `199 total |
-> 196 success | 3 error` on Fusion, `PASS=198 ERROR=3 TOTAL=201` on Core, the same three tests).
+> 201 success | 3 error` on Fusion, `PASS=203 ERROR=3 TOTAL=206` on Core, the same three tests).
 > This is the repeat-build artifact, not a regression. `--full-refresh` resets them. All three
 > duckdb CI jobs pass the flag for this reason rather than relying on a clean runner.
 
@@ -126,8 +127,8 @@ dbt build --project-dir integration_tests/cloud --target bigquery --full-refresh
 There is no CI job for this. The cloud suite runs locally, against your own profile, by following
 §4's cloud pass.
 
-Expected result: all models build and all **32** `assert_*` tests pass, for
-`TOTAL=144` per target (verified 2026-09-25 on Snowflake, Databricks, and BigQuery, under both
+Expected result: all models build and all **44** `assert_*` tests pass, for
+`TOTAL=172` per target (verified 2026-09-25 on Snowflake, Databricks, and BigQuery, under both
 dbt Core and dbt Fusion). A failure here is meaningful
 — it means a wrapper's dialect is wrong for that account, a model returned nothing, or the AI
 produced an off-taxonomy / ungrounded result. See §5.
@@ -617,6 +618,21 @@ DBT=integration_tests/cloud/.venv/bin/dbt   # Fusion: DBT=dbtf
 C="--project-dir integration_tests/cloud --target snowflake"   # repeat for databricks, bigquery
 ```
 
+> **Running the cloud pass under Fusion on BigQuery requires a different working directory.**
+> Fusion resolves `seed-paths` against the process CWD rather than against `--project-dir`, so
+> `dbt build --project-dir integration_tests/cloud --target bigquery` fails all 5 seeds. Run it
+> from inside the project instead, with no `--project-dir`:
+>
+> ```bash
+> cd integration_tests/cloud
+> dbtf build --target bigquery --full-refresh --vars '{ai_functions_enabled: true}'
+> ```
+>
+> Snowflake and Databricks are unaffected under Fusion and run from the repo root like Core does.
+> The seed failure is the whole symptom, so do not "correct" the command back to the
+> `--project-dir` shape when it reappears in a diff. Core resolves `seed-paths` against
+> `--project-dir` on every target and needs none of this.
+
 Every cloud step that reaches an AI wrapper also needs `--vars '{ai_functions_enabled: true}'`
 (§3.3). It is written out in full below rather than hidden behind a variable, so no step can be
 copied without the opt-in visible.
@@ -628,7 +644,7 @@ Fusion, which changes what you are testing without saying so.
 
 | # | Step | Assumes | Pass looks like |
 |---|---|---|---|
-| 1 | Full-refresh baseline: `$DBT build $D --full-refresh` | anything | `PASS=201` |
+| 1 | Full-refresh baseline: `$DBT build $D --full-refresh` | anything | `PASS=206` |
 | 2 | §4.1 version guard, v1 then v2 | step 1 | both runs green |
 | 3 | §4.10 `vg_adopt` adoption | step 1 | second run green, v1 stamped |
 | 4 | §4.2 `logged_delta` phase 2 | step 1 | `row_count = 5` |
@@ -654,21 +670,21 @@ database inconsistent:
 ```bash
 $DBT build $D --indirect-selection cautious --full-refresh \
   --select orphan_chunks orphan_embeddings --vars '{oc_target_tokens: 20}'
-$DBT build $D --full-refresh          # back to PASS=201
+$DBT build $D --full-refresh          # back to PASS=206
 ```
 
 #### cloud pass (real AI calls, run once per target)
 
 | # | Step | Assumes | Pass looks like |
 |---|---|---|---|
-| 1 | Full-refresh baseline: `$DBT build $C --full-refresh --vars '{ai_functions_enabled: true}'` | anything | `TOTAL=144`, ideally `PASS=144` |
+| 1 | Full-refresh baseline: `$DBT build $C --full-refresh --vars '{ai_functions_enabled: true}'` | anything | `TOTAL=172`, ideally `PASS=172` |
 | 2 | §4.1 version guard, v1 then v2 | step 1 | both runs green |
 | 3 | §4.3 content-hash delta phase 2 | a *fresh* step 1 | `row_count = 1` |
 | 4 | §4.5 chunk partition delta phase 2 | step 1 | per §4.5 |
 | 5 | §4.6 attach_metadata delta phase 2 | step 1 | per §4.6 |
 | 6 | §4.7 knowledge_base per-arm delta phase 2 | step 1 | per §4.7 |
 | 7 | §4.4 orphan sequence | step 1 | the `relationships` test **FAILS** |
-| 8 | **Cleanup rebuild (mandatory)** | step 7 | `TOTAL=144` again |
+| 8 | **Cleanup rebuild (mandatory)** | step 7 | `TOTAL=172` again |
 
 §4.1's cloud half used to run in a CI job. That job is gone (it never once executed and depended
 on a repo secret that never existed), so this pass is now the only thing covering it.
@@ -686,6 +702,121 @@ $DBT build $C --full-refresh --vars '{ai_functions_enabled: true}'
 ```
 
 The pass is complete when the final rebuild is clean. Do not leave a warehouse mid-sequence.
+
+### 4.12 The AI-backed incremental embed model (multi-run, cloud only for the real call)
+
+`embed_delta` is the production pattern the README presents, embed() plus content_hash plus
+version_guard plus incremental_delta_predicate on ONE incremental model, run for real for the
+first time. It pins `full_refresh=var('allow_full_reembed', false)`, which is what
+`require_full_refresh_gate` requires and also what makes the model safe: dbt's own `full_refresh`
+config overrides a bare `--full-refresh` CLI flag per node, so an unrelated `--full-refresh` on a
+shared job cannot silently re-bill this model's whole corpus.
+
+That means rebuilding the baseline is a deliberate opt-in, not the default `--full-refresh`
+behavior every other fixture in this file gets. Forgetting the `allow_full_reembed` var does not
+break anything; it just means the "baseline" step below re-embeds nothing, because the previous
+build's rows are still there and the config has already fenced off the CLI flag.
+
+```bash
+# 1) Baseline: embeds all 10 rows. allow_full_reembed is required here, not optional --full-refresh.
+$DBT build $D --select embed_delta_stg embed_delta assert_embed_delta --indirect-selection cautious \
+  --full-refresh --vars '{allow_full_reembed: true}'
+
+# 2) Phase 2: edits utterance_id 4's text. Embeds exactly that one row; every other embedded_at
+#    stays frozen at its phase-1 value.
+$DBT build $D --select embed_delta_stg embed_delta assert_embed_delta --indirect-selection cautious \
+  --vars '{ed_edit_id: 4}'
+```
+
+On the cloud pass, add `ai_functions_enabled: true` to both `--vars` maps, same as every other
+step here that reaches an AI wrapper. Cost: 10 embed calls in step 1, 1 in step 2, per target.
+
+**Confirm the gate, not just the model.** After step 2, run a bare `$DBT build $D --full-refresh
+--vars '{ed_edit_id: 4}'` (cloud: add `ai_functions_enabled: true`) with no `allow_full_reembed`.
+The model must NOT re-embed: `assert_embed_delta` makes no row-count claim on that shape, only its
+invariants (no null embeddings, corpus size unchanged, exactly two distinct `embedded_at` values
+across the table), so a passing build here means the gate held, not that the assertion was too
+weak to notice a break. This is the live path `require_full_refresh_gate` never had before this
+model existed.
+
+duckdb runs the same two steps on the established stand-in-literal precedent, continuously, for
+free, and proves the plumbing; it cannot exercise the gate itself, which lives inside `embed()`
+and never fires without a real AI call. `probe_full_refresh_gate` (§ci.yml) covers that macro's
+raise path separately.
+
+### 4.13 `create_vector_index`'s live cycle (manual, opt-in, not part of either pass)
+
+Not part of §4.11's duckdb or cloud pass, and not run by CI. `create_vector_index` creates an
+EXTERNAL, separately-billed, idle-serving object with its own lifecycle independent of dbt, so
+running this is a deliberate, occasional choice, not something either pass exercises by default.
+A create is not validated as done here until its matching drop has been confirmed too; do not
+stop partway through this section.
+
+**Snowflake (Cortex Search service).** The service auto-embeds a TEXT column; it does not take a
+pre-computed embedding column, and the base query must select only the search column plus any
+`attributes`, never every column on the relation. Confirmed live: passing an already-embedded
+`VECTOR` column, or a relation carrying one under a bare `select *`, both raise on the warehouse
+side rather than compiling to something silently wrong.
+
+```bash
+dbt run-operation create_vector_index --project-dir integration_tests/cloud --target snowflake \
+  --args '{name: ce_manual_idx, relation: embeddings, column: utterance_text, attributes: [call_id], warehouse: <your warehouse>}'
+
+# confirm it exists (Snowflake): SHOW CORTEX SEARCH SERVICES LIKE 'ce_manual_idx';
+
+dbt run-operation drop_vector_index --project-dir integration_tests/cloud --target snowflake \
+  --args '{name: ce_manual_idx}'
+```
+
+**BigQuery (vector index).** `CREATE VECTOR INDEX` with `index_type: IVF` requires at least 5,000
+rows in the base table; confirmed live that the 10-row integration fixtures raise "Total rows 10
+is smaller than min allowed 5000." Point this at a real corpus sized for it, not at this
+project's fixtures. `DROP VECTOR INDEX` also requires the `ON <table>` clause, unlike Snowflake's
+drop, which takes only the service name; `relation=` is a required argument on
+`drop_vector_index` for BigQuery for that reason.
+
+```bash
+dbt run-operation create_vector_index --project-dir integration_tests/cloud --target bigquery \
+  --args '{name: ce_manual_idx, relation: "<project>.<dataset>.<a 5000+ row table>", column: embedding, distance_type: COSINE, index_type: IVF}'
+
+# confirm it exists (BigQuery):
+#   select index_name, index_status from `<project>.<dataset>`.INFORMATION_SCHEMA.VECTOR_INDEXES;
+# TEMPORARILY DISABLED with 0% coverage right after creation is expected; BigQuery builds it
+# asynchronously. Do not wait for ACTIVE before proceeding to the drop below.
+
+dbt run-operation drop_vector_index --project-dir integration_tests/cloud --target bigquery \
+  --args '{name: ce_manual_idx, relation: "<project>.<dataset>.<the same table>"}'
+```
+
+**Databricks.** Both `create_vector_index` and `drop_vector_index` raise on Databricks by design,
+pointing at the Vector Search API/SDK. There is nothing to run here; the raise itself is what
+`assert_create_vector_index_ddl`'s sibling probes cover on duckdb, credential-free.
+
+Dropping the underlying table before dropping the index removes the index too on BigQuery
+(confirmed live); that is not a substitute for running `drop_vector_index`, since a real
+consumer's base table is not disposable the way a scratch table for this validation is.
+
+### 4.14 `print_embedding_canary_model_delta` (manual, opt-in, cloud only)
+
+Not part of either pass. Its own docstring says why: results belong in ADR-0026's Consequences
+section, not in any baseline or CI gate, and it is run manually by a maintainer, not
+continuously. Confirmed live on Snowflake: the same model passed as both `model_a` and `model_b`
+prints similarity `1.0` for all four probes, proving the embed/serialize/compare plumbing runs
+end to end.
+
+```bash
+dbt run-operation print_embedding_canary_model_delta --project-dir integration_tests/cloud \
+  --target snowflake --vars '{ai_functions_enabled: true}' \
+  --args '{model_a: <model>, model_b: <a same-dimension model>}'
+```
+
+`model_a` and `model_b` must share an output dimension. Confirmed live: pairing
+`snowflake-arctic-embed-m-v1.5` (768-dim) against `snowflake-arctic-embed-l-v2.0` (1024-dim)
+raises "Vector value being cast to a vector is not an array or vector, or has incorrect
+dimension," because `canary_cosine_similarity`'s Snowflake branch casts through one literal,
+project-wide dimension. This is not a bug in the operation. It matches the drift event it exists
+to measure: a provider updating a model behind a stable alias, which does not change output
+dimension.
 
 ---
 
@@ -750,13 +881,17 @@ than a named one), or a BigQuery project without the AI API enabled.
 
 What remains uncovered or conditional (everything else is now covered on all three warehouses):
 
-- **`create_vector_index`, the live half.** Run-operation only, and it creates external, billed
-  objects, so an actual create-and-drop cycle on Snowflake and BigQuery stays out of the suite
-  (`LIVE-VALIDATION DEFERRED`). The other three implementations are covered without one:
-  `default__` and `databricks__` raise, and the Snowflake and BigQuery DDL strings are asserted
-  as assembled text by `assert_create_vector_index_ddl`. That proves every argument is
-  interpolated and the optional clauses appear and disappear with their arguments. It does not
-  prove either warehouse accepts the DDL.
+- **`create_vector_index`'s live cycle is manual, not continuous.** §4.13 documents a
+  create-and-drop cycle for Snowflake and BigQuery, confirmed live, but it is opt-in and outside
+  both passes because the objects it creates are external, separately billed, and idle-serving.
+  What CI does cover on every change, credential-free: `default__` and `databricks__` raise, and
+  the Snowflake and BigQuery DDL strings are asserted as assembled text by
+  `assert_create_vector_index_ddl`. Running the live cycle found two real defects in the shipped
+  macros, both now fixed: `snowflake__create_vector_index`'s base query selected every column on
+  the relation, which raises the moment that relation carries a `VECTOR` column, the realistic
+  case for anything with pre-computed embeddings; and `bigquery__drop_vector_index` omitted the
+  `ON <table>` clause BigQuery's `DROP VECTOR INDEX` requires, which would have made every drop
+  fail.
 - **The Databricks runtime prerequisite is documented but unenforced.**
   `require_databricks_ai_runtime()` has an empty body. The real requirement is DBR 15.4 LTS or
   above and not Databricks SQL Classic. Enforcing it needs a `current_version()` round trip at
@@ -858,7 +993,55 @@ pattern accordingly.
 
 ---
 
-## 7. Quick reference
+## 7. The coverage matrix
+
+`COVERAGE_MATRIX.md`, checked into the repo root, is generated from the call graph, the same
+walker (`ci/macro_call_graph.py`) the `embedding_logic_hash` gate uses (`ci/coverage_matrix.py`).
+Prose maintained by hand, the shape the README and this file's §4 tables use for everything
+else, has no way to notice when a shipped implementation is missing from it: `no_oversized_chunks`,
+`grounded`, and several other capabilities have gone uncovered in these tables at points during
+this project despite shipping. A generated matrix, computed from the call graph, cannot drift from
+the code the same way, since it IS a computation over the code. `create_vector_index`'s four
+implementations, `require_databricks_ai_runtime`, and the now-deleted `require_bq_model` all
+reached `main` unexecuted before someone went looking by hand.
+
+Regenerate it after adding or removing a dispatched macro implementation, an entry point (a model,
+a test, a run-operation wired into CI), or a schema.yml test attachment:
+
+```bash
+python ci/coverage_matrix.py --generate
+python ci/test_coverage_matrix.py
+```
+
+Check mode (`python ci/coverage_matrix.py`, no `--generate`) is what CI runs: it fails if the
+checked-in file disagrees with a fresh computation, or if any dispatched macro implementation is
+reached by nothing at all. That second failure mode is the actual gate. Adding a new dispatched
+macro with no coverage anywhere makes the build fail until either something exercises it or
+`ci/coverage_exceptions.yml` gets an entry explaining how it is validated instead.
+
+**What the matrix can prove, and what it cannot.** BUILT means a real `dbt build` of the duckdb or
+cloud project genuinely dispatches to that implementation for that target: the strongest signal,
+since it is the actual mechanism a consumer's own project will use. PROBED means a direct,
+package-qualified call names that exact implementation from a run-operation or model, regardless
+of which connection is active; several of this package's own coverage stories exist only this
+way, and it proves the Jinja renders without a Python-level crash but does not by itself prove the
+resulting SQL is accepted by the warehouse the implementation is named for. What the matrix does
+NOT compute, and does not pretend to: whether a build that reaches an implementation also ASSERTS
+something about its output, versus merely executing it without erroring. That distinction is a
+judgment call about test semantics, not a property of the call graph, and stays in §4's tables,
+in prose, one capability at a time.
+
+**`ci/coverage_exceptions.yml` is not a way to make the gate go away.** Every entry names a real,
+documented validation path elsewhere: a manual procedure in this file, cross-referenced, for
+something that needs a warehouse or exists to produce numbers for an ADR rather than to pass or
+fail a build. `default__ai_agg`, `default__classify`, `default__extract`, `default__generate`, and
+`default__embed` all get the same duckdb positive control: `probe_ai_gate.sql` takes an
+`ai_wrapper` var selecting among all five wrappers, so one probe and one CI step per wrapper
+covers the "not implemented for the 'duckdb' adapter" raise on each.
+
+---
+
+## 8. Quick reference
 
 ```bash
 # Deterministic (do this constantly)

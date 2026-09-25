@@ -5,7 +5,11 @@
     consecutive terminators, leading terminators, no terminator). Both rules are evaluated here in duckdb
     so the comparison is deterministic and credential-free; a divergence (like the old whitespace-only
     Snowflake rule) returns the offending document_id. Actual Snowflake execution is LIVE-VALIDATION
-    DEFERRED, but the rule it implements is pinned equal to the canonical one here. -#}
+    DEFERRED, but the rule it implements is pinned equal to the canonical one here.
+
+    Both rules explode with two parallel UNNESTs rather than UNNEST ... WITH ORDINALITY AS u(a, b),
+    which duckdb accepts but dbt Fusion's parser reports as SyntaxInvalid (dbt0101). Same reason
+    default__split_sentences_core avoids it. -#}
 with cases as (
     select * from (values
         ('a', 'Data pipelines break often. Observability is the core need! Can we see which failed?'),
@@ -20,8 +24,14 @@ with cases as (
 default_rule as (   -- regexp_extract_all('[^.!?]+[.!?]*'), as default/BigQuery/Databricks do
     select document_id, list(trim(s) order by n) as sents
     from (
-        select document_id, u.s as s, u.n as n
-        from cases, unnest(regexp_extract_all(document_text, '[^.!?]+[.!?]*')) with ordinality as u(s, n)
+        select
+            document_id,
+            unnest(parts) as s,
+            unnest(range(1, len(parts) + 1)) as n
+        from (
+            select document_id, regexp_extract_all(document_text, '[^.!?]+[.!?]*') as parts
+            from cases
+        ) c
     ) t
     where trim(s) <> ''
     group by document_id
@@ -29,12 +39,19 @@ default_rule as (   -- regexp_extract_all('[^.!?]+[.!?]*'), as default/BigQuery/
 snowflake_rule as (   -- strip leading terminators, sentinel after every terminator run, then split
     select document_id, list(trim(s) order by n) as sents
     from (
-        select document_id, u.s as s, u.n as n
-        from cases,
-             unnest(string_split(
-                 regexp_replace(regexp_replace(document_text, '^[.!?]+', '', 'g'), '([.!?]+)', '\1~~CE_SENT~~', 'g'),
-                 '~~CE_SENT~~'
-             )) with ordinality as u(s, n)
+        select
+            document_id,
+            unnest(parts) as s,
+            unnest(range(1, len(parts) + 1)) as n
+        from (
+            select
+                document_id,
+                string_split(
+                    regexp_replace(regexp_replace(document_text, '^[.!?]+', '', 'g'), '([.!?]+)', '\1~~CE_SENT~~', 'g'),
+                    '~~CE_SENT~~'
+                ) as parts
+            from cases
+        ) c
     ) t
     where trim(s) <> ''
     group by document_id

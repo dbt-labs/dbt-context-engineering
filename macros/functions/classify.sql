@@ -79,7 +79,7 @@
 
 
 {% macro databricks__classify(input_column, prompt, output_schema, model) -%}
-    {{ dbt_context_engineering.require_databricks_serverless() }}
+    {{ dbt_context_engineering.require_databricks_ai_runtime() }}
     {%- set cats = dbt_context_engineering.schema_categories(output_schema) -%}
     {#- ai_classify already returns the chosen label as a STRING — identity (cast for a stable type).
         Labels go through str_literal so a value with a quote/backslash can't break the array literal. -#}

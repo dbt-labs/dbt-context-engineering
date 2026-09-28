@@ -44,7 +44,7 @@
 
 
 {% macro databricks__embed(input_column, model) -%}
-    {{ dbt_context_engineering.require_databricks_serverless() }}
+    {{ dbt_context_engineering.require_databricks_ai_runtime() }}
     {%- set model = model or var('embedding_model', none) -%}
     {#- execute-gated; see snowflake__embed above. -#}
     {%- if model is none -%}{%- if execute -%}{{ exceptions.raise_compiler_error("embed: set var embedding_model to an embedding serving endpoint, or pass model=.") }}{%- else -%}{%- set model = 'unset' -%}{%- endif -%}{%- endif -%}

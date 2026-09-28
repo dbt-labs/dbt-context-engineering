@@ -58,7 +58,7 @@
 
 
 {% macro databricks__generate(input_column, prompt, output_schema, model) -%}
-    {{ dbt_context_engineering.require_databricks_serverless() }}
+    {{ dbt_context_engineering.require_databricks_ai_runtime() }}
     {%- set model = model or var('model_generate', none) -%}
     {#- execute-gated; see snowflake__generate above. -#}
     {%- if model is none -%}{%- if execute -%}{{ exceptions.raise_compiler_error("generate: set var model_generate or pass model=.") }}{%- else -%}{%- set model = 'unset' -%}{%- endif -%}{%- endif -%}

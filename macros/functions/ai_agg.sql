@@ -58,7 +58,7 @@
 
 
 {% macro databricks__ai_agg(input_column, prompt, order_column, model) -%}
-    {{ dbt_context_engineering.require_databricks_serverless() }}
+    {{ dbt_context_engineering.require_databricks_ai_runtime() }}
     {%- set model = model or var('model_agg', var('model_generate', none)) -%}
     {#- execute-gated, same reasoning as default__ai_agg above: an unguarded raise here breaks
         parsing of the whole project the moment any model anywhere calls ai_agg() without a

@@ -6,6 +6,7 @@ models:
       chunk output over the synthetic transcript seed, var-driven target_tokens (oc_target_tokens)
       so it can be rebuilt with a different chunking config to simulate a re-chunk. See
       orphan_embeddings and ADR-0023's chunk_id orphaning discussion.
+
     columns:
       - name: chunk_id
         tests: [unique, not_null]
@@ -69,6 +70,21 @@ models:
         tests: [not_null]
       - name: recording_url
         tests: [not_null]
+
+  - name: chunk_sized
+    description: >
+      chunk() over the transcript seed at a var-driven target (sized_target_tokens, default 200)
+      that every unit fits under. Exists to host no_oversized_chunks: the default target proves
+      the test passes on a corpus within budget, and CI re-runs the same test with a target of 3
+      to prove it catches an oversized chunk. See the model's own comment for why no existing
+      chunking model can serve as the host.
+    columns:
+      - name: chunk_id
+        tests: [unique, not_null]
+      - name: exceeds_target
+        description: "token_estimate > target_tokens for the chunk."
+        tests:
+          - dbt_context_engineering.no_oversized_chunks
 
   - name: chunk_edge_units
     description: >
@@ -192,6 +208,26 @@ models:
               arguments:
                 to: ref('orphan_chunks')
                 field: chunk_id
+
+  - name: extract_flat
+    description: >
+      extract's structured output flattened to scalars. Hosts the grounded generic test, which is
+      the wrapper form a consumer writes in their own schema.yml. The assert_extract_grounded
+      singular test alongside it checks the same property by calling grounded's internals
+      (contains, norm_text, collapse_ws) directly, so the two together cover the internals and
+      the wrapper around them.
+
+      allow_empty is true on purpose. A real extract call can legitimately return no evidence for
+      an utterance that carries no signal, and grounded's default would fail those rows. That is
+      the same line assert_extract_grounded draws, so the two agree on what counts as a
+      hallucination rather than disagreeing on live output.
+    columns:
+      - name: evidence
+        tests:
+          - dbt_context_engineering.grounded:
+              arguments:
+                source_text_column: utterance_text
+                allow_empty: true
 
   - name: orphan_kb_source
     description: >

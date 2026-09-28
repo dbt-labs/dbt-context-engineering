@@ -21,6 +21,18 @@
   raises there, same as every other AI call in this package. Cost: 8 embed calls per invocation,
   run manually by a maintainer. Results belong in ADR-0026's Consequences section, not in any
   baseline or CI gate.
+
+  model_a and model_b must share the same output dimension. On Snowflake, canary_cosine_similarity
+  casts model_b's serialized vector through a single fixed dimension, the same
+  embedding_canary_vector_dimension the project sets for its one configured embedding_model,
+  because that macro's Snowflake branch requires a literal dimension on both sides of the
+  comparison. Confirmed live: pairing snowflake-arctic-embed-m-v1.5 (768-dim) against
+  snowflake-arctic-embed-l-v2.0 (1024-dim) raises "Vector value being cast to a vector is not an
+  array or vector, or has incorrect dimension." This is not a defect in this operation; it is the
+  same constraint the rest of the canary already operates under, and it matches what the
+  operation is actually for: measuring a provider quietly updating a model behind a stable alias,
+  which does not change output dimension, not a deliberate switch to a model family with a
+  different one.
 -#}
 
 {% macro print_embedding_canary_model_delta(model_a, model_b) %}

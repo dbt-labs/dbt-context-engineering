@@ -1,0 +1,14 @@
+# Every implementation ci/coverage_matrix.py finds completely unreached (no dispatch-driven build,
+# no direct qualified probe) must have an entry here, or `python ci/coverage_matrix.py` fails the
+# build. One line each: <name>: <why it's validated some other way, or that it isn't yet>.
+#
+# This is the gate that closes the gap where new dispatched SQL could ship with silent,
+# undeclared coverage. An entry here is not automatically a pass -- an open, unclosed gap belongs
+# here too, named, so it stays visible instead of disappearing into "nobody's looking."
+
+# Manual-only run-operations. Documented in TESTING.md, deliberately outside both the duckdb and
+# cloud passes and outside CI, because they either need a warehouse or exist to produce numbers
+# for an ADR rather than to pass or fail a build.
+create_vector_index: manual live procedure, TESTING.md section 4.13. Creates a real, separately-billed external object; not run by CI or either standard pass.
+drop_vector_index: manual live procedure, TESTING.md section 4.13, paired with create_vector_index above.
+print_embedding_canary_model_delta: manual, run by a maintainer, TESTING.md section 4.14. Results feed ADR-0026's Consequences section, not a baseline or a CI gate.

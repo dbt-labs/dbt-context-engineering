@@ -86,6 +86,27 @@ models:
         tests:
           - dbt_context_engineering.no_oversized_chunks
 
+  - name: chunk_overlap
+    description: "chunk output with overlap enabled (target=40, overlap=15)."
+    columns:
+      - name: chunk_id
+        tests: [unique, not_null]
+      - name: source_rows
+        tests: [not_null]
+
+  - name: canary_calibration
+    description: "Known-cosine fixtures (0.9999/0.999/0.99/0.95 vs [1,2,3]) for
+      canary_cosine_similarity (ADR-0026). assert_canary_calibration_sensitivity asserts both
+      numerical correctness and that embedding_canary_similarity_threshold trips where expected,
+      on this engine's own implementation."
+    columns:
+      - name: probe_id
+        tests: [unique, not_null]
+      - name: expected_similarity
+        tests: [not_null]
+      - name: observed_similarity
+        tests: [not_null]
+
   - name: chunk_edge_units
     description: >
       Unit fixture for chunk()'s data-shape edge cases: ADR-0002's worked example, an oversized

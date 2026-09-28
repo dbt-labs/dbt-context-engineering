@@ -194,7 +194,7 @@ These are not extras or afterthoughts. They are capabilities we know context eng
 
 - **`generate`** / **`extract`**: the other two row-level AI operations. `generate` is free-form generation (plain text or a structured object); `extract` pulls a typed record of fields present in the text. `classify` (the precision unlock above) covers the closed-set-label case; reach for these when you need free text or a multi-field typed extraction. See [ADR-0010](adr/0010-four-ai-operations.md). Read structured results back portably with `text()` / `field()` ([ADR-0008](adr/0008-normalizing-ai-output.md)).
 - **`ai_agg`**: group-level aggregation (summarize a whole transcript, roll up sentiment across an account). Cross-adapter behavior diverges the most here; pair with `guard_agg_batch` on Databricks. See [ADR-0028](adr/0028-add-ai-agg-group-level-aggregation.md).
-- **`create_vector_index`**: opt-in, `dbt run-operation` **only** (never a model). Builds the engine's external, separately-billed index/service (Snowflake Cortex Search, BigQuery vector index; Databricks via its Vector Search API) for scale beyond the brute-force default. Stateful, with idle-serving cost, so drop it explicitly. See [ADR-0005](adr/0005-retrieval-brute-force-default-index-opt-in.md).
+- **`create_vector_index`** / **`drop_vector_index`**: opt-in, `dbt run-operation` **only** (never a model). Builds or tears down the engine's external, separately-billed index/service (Snowflake Cortex Search, BigQuery vector index; Databricks via its Vector Search API) for scale beyond the brute-force default. Stateful, with idle-serving cost, so a create is not validated as done until its drop has been confirmed too. See [ADR-0005](adr/0005-retrieval-brute-force-default-index-opt-in.md).
 - **`embedding_canary`**: runtime drift monitor. Re-embeds a small fixed probe set and compares it against a blessed baseline by cosine similarity, catching a provider silently changing a pinned model's behavior. **Disabled by default** (`monitoring: +enabled: false`); it makes real `embed()` calls, so add it only to a scheduled production job. Its baseline seed ships disabled the same way, so turning the monitor on also means setting `seeds: dbt_context_engineering: +enabled: true`, or `dbt build`/`dbt seed` won't have the baseline to compare against. See [ADR-0026](adr/0026-embedding-canary-runtime-drift-monitor.md).
 
 ---
@@ -275,7 +275,7 @@ Every public object. All are called **package-qualified** (`dbt_context_engineer
 
 #### Search
 
-**`vector_search(relation, embedding_column, query_embedding, top_k=10, id_column=none, select_columns=none, filter=none)`**: ranked cosine similarity over an embedding **column** (brute-force; no index). Returns `[id_column, select_columns..., score]` ordered, `top_k`. Secondary sort on `id_column` for tie stability.
+**`vector_search(relation, embedding_column, query_embedding, top_k=10, id_column=none, select_columns=none, filter=none)`**: ranked cosine similarity over an embedding **column** (brute-force; no index). Returns `[id_column, select_columns..., score]` ordered, `top_k`. Secondary sort on `id_column` for tie stability, which on duckdb, Snowflake and Databricks also fixes **which** of several equally-scoring rows crosses the `top_k` cutoff. **On BigQuery it does not**: `VECTOR_SEARCH` is a table function that selects its own `top_k` before any `ORDER BY` applies, so a tie straddling the cutoff resolves arbitrarily and not stably between runs. Ranking quality is unaffected, since the rows that vary score identically, but a materialized BigQuery search result is not reproducible in that case. Request more rows than you need and apply your own `ORDER BY` and `LIMIT`, or deduplicate the corpus before embedding.
 
 **`knowledge_base(sources)`**: unions many pre-embedded source relations into one common-shape mart (`source_type, source_id, account_key, text, embedding, ts, citation_url, classification`) with per-source lineage. `sources` is a list of dicts; `citation_url` and `classification` are each independently optional per source.
 
@@ -301,7 +301,7 @@ Every public object. All are called **package-qualified** (`dbt_context_engineer
 
 **`guard_agg_batch(relation, input_column, group_by_column, filter=none)`**: grouped counterpart to `guard_batch` for `ai_agg`; sums estimated tokens per group and raises on `max_agg_group_tokens`.
 
-**`create_vector_index(name, relation, column, attributes=[], warehouse=none, target_lag='1 day', embedding_model=none, distance_type='COSINE', index_type='IVF', storing=[])`**: **opt-in, `dbt run-operation` ONLY**. Builds the engine's external, separately-billed index/service. Drop it explicitly.
+**`create_vector_index(name, relation, column, attributes=[], warehouse=none, target_lag='1 day', embedding_model=none, distance_type='COSINE', index_type='IVF', storing=[])`** / **`drop_vector_index(name, relation=none)`**: **opt-in, `dbt run-operation` ONLY**. Builds or tears down the engine's external, separately-billed index/service.
 
 **`embedding_canary`** *(model, disabled by default)*: runtime drift monitor; re-embeds a fixed probe set and compares to a blessed baseline by cosine similarity.
 

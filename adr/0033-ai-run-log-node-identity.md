@@ -13,11 +13,11 @@ be correlated with warehouse query history carrying the same `node_id` in dbt qu
 ## Context
 
 One dbt invocation can execute multiple nodes that call the same function with the same AI model.
-For example, `nexus_chunk_embeddings` and `nexus_topic_embed` can both call `embed` with the same
+For example, `document_embeddings` and `topic_embeddings` can both call `embed` with the same
 embedding model. Their existing log rows share `invocation_id`, `function_name`, and `model_name`,
 so those fields cannot distinguish the source node. The same ambiguity makes it difficult to join
 the AI usage record to warehouse usage history, where dbt query comments identify the node by its
-unique id (for example `model.psaitt_snow_sand.nexus_claim_extractions`).
+unique id (for example `model.my_project.claim_extractions`).
 
 `ai_run_log` is append-only and may already exist in a consumer's warehouse. Its on-run-start
 bootstrap uses `CREATE TABLE IF NOT EXISTS`, which creates a missing relation but does not evolve

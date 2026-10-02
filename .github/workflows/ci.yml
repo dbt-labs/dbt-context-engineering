@@ -140,6 +140,39 @@ jobs:
             --select vg_adopt --full-refresh --vars '{vg_legacy: true}'
           dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
             --select vg_adopt assert_vg_adopt --vars '{vg_legacy: false, vg_ver: v1}'
+      - name: on-run-start migrates a pre-existing ai_run_log without node_id (duckdb)
+        # Simulate a legacy installation, then run twice: the first run adds node_id before the
+        # hook inserts; the second proves the column check and ALTER are idempotent.
+        run: |
+          python - <<'PY'
+          import duckdb
+          connection = duckdb.connect('target/tests.duckdb')
+          connection.execute('delete from main.ai_run_log')
+          connection.execute('alter table main.ai_run_log drop column node_id')
+          connection.close()
+          PY
+          dbt run --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+            --select logged_model --vars '{ai_functions_enabled: true}'
+          dbt run --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+            --select logged_model --vars '{ai_functions_enabled: true}'
+          python - <<'PY'
+          import duckdb
+          connection = duckdb.connect('target/tests.duckdb', read_only=True)
+          columns = {row[1].lower() for row in connection.execute("pragma table_info('main.ai_run_log')").fetchall()}
+          assert 'node_id' in columns, f'node_id missing after migration; columns={sorted(columns)}'
+          rows = connection.execute("""
+              select invocation_id, event, node_id from main.ai_run_log
+              where model_name = 'test-model'
+          """).fetchall()
+          assert len(rows) == 4, rows
+          assert len({invocation_id for invocation_id, _, _ in rows}) == 2, rows
+          assert all(node_id == 'model.duckdb_tests.logged_model' for _, _, node_id in rows), rows
+          events_by_invocation = {}
+          for invocation_id, event, _ in rows:
+              events_by_invocation.setdefault(invocation_id, set()).add(event)
+          assert all(events == {'started', 'completed'} for events in events_by_invocation.values()), rows
+          connection.close()
+          PY
 
       # ---- Safety-gate negative tests -------------------------------------------------------
       #

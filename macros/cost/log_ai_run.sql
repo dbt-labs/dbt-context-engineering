@@ -16,8 +16,9 @@
   SAME function_name/model_name, which appends a second row for this invocation at event =
   'completed' once the model finishes successfully. A model that errors mid-run never reaches its
   post_hook, so no 'completed' row ever appears for it; ai_run_log is append-only, so completion is
-  read as "does a matching 'completed' row exist for this invocation/function_name/model_name," not
-  as a mutation of the 'started' row itself. See complete_ai_run()'s own docstring for why this is
+  read as "does a matching 'completed' row exist for this invocation/function_name/model_name/node_id," not
+  as a mutation of the 'started' row itself. node_id is the dbt model unique_id from hook context.
+  See complete_ai_run()'s own docstring for why this is
   a second INSERT rather than an UPDATE.
 
   Which hook phase to use depends on what `relation`/`filter` actually reference, not on
@@ -84,6 +85,7 @@
     {%- set str_t = dbt.type_string() -%}
     {%- set num_t = dbt.type_numeric() -%}
     {%- set model_sql = "'" ~ model_name ~ "'" if model_name is not none else "cast(null as " ~ str_t ~ ")" -%}
+    {%- set node_id_sql = "'" ~ model.unique_id ~ "'" if model is defined and model is not none else "cast(null as " ~ str_t ~ ")" -%}
     {%- set price = var('cost_per_1k_tokens', none) -%}
 
     {#- Size the batch with a SINGLE scan of the relation (derived table _sz), then reference its
@@ -99,7 +101,7 @@
     {%- endif -%}
 
     insert into {{ ref('ai_run_log') }}
-        (invocation_id, model_name, function_name, row_count, est_tokens, est_cost, run_at, event)
+        (invocation_id, model_name, function_name, row_count, est_tokens, est_cost, run_at, event, node_id)
     select
         '{{ invocation_id }}',
         {{ model_sql }},
@@ -110,7 +112,8 @@
         {{ cost_expr }},
         {#- cast to the column's type: Snowflake current_timestamp is TZ-aware but run_at is NTZ -#}
         cast({{ dbt.current_timestamp() }} as {{ dbt.type_timestamp() }}),
-        'started'
+        'started',
+        {{ node_id_sql }}
     from (select {{ sz_select }} from {{ rel }}
         {%- if filter is not none and filter | trim != '' %}
         where {{ filter }}

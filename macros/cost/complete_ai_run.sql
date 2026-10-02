@@ -13,7 +13,8 @@
 
   Pass the SAME function_name/model_name given to the paired log_ai_run call on this model, so a
   downstream reconciliation can join this row back to the 'started' row it completes, on
-  invocation_id + function_name + model_name.
+  invocation_id + function_name + model_name + node_id. node_id is the dbt model unique_id from
+  hook context.
 
   Usage (pairs with log_ai_run — see its docstring for the pre_hook-vs-post_hook rule when
   `filter` is `this`-derived; complete_ai_run itself has no such hazard, since it never
@@ -33,8 +34,9 @@
     {#- No execute-guard: the ref() below must always render for dbt to infer the ai_run_log
         dependency, same as log_ai_run. -#}
     {%- set model_sql = "'" ~ model_name ~ "'" if model_name is not none else "cast(null as " ~ dbt.type_string() ~ ")" -%}
+    {%- set node_id_sql = "'" ~ model.unique_id ~ "'" if model is defined and model is not none else "cast(null as " ~ dbt.type_string() ~ ")" -%}
     insert into {{ ref('ai_run_log') }}
-        (invocation_id, model_name, function_name, row_count, est_tokens, est_cost, run_at, event)
+        (invocation_id, model_name, function_name, row_count, est_tokens, est_cost, run_at, event, node_id)
     select
         '{{ invocation_id }}',
         {{ model_sql }},
@@ -43,5 +45,6 @@
         cast(null as {{ dbt.type_numeric() }}),
         cast(null as {{ dbt.type_numeric() }}),
         cast({{ dbt.current_timestamp() }} as {{ dbt.type_timestamp() }}),
-        'completed'
+        'completed',
+        {{ node_id_sql }}
 {%- endmacro %}

@@ -280,6 +280,12 @@ temporarily switching `logged_delta` to the post-hook pattern locally: the phase
 unaffected (first build has no filter to get the timing wrong), but the phase-2 run logs
 `row_count = 0` and `assert_logged_delta` fails.
 
+The singular test `assert_run_log_node_id` runs after `logged_model` and checks that both the
+`started` and `completed` rows for `model_name = 'test-model'` carry
+`node_id = 'model.duckdb_tests.logged_model'`. The deterministic CI job also removes `node_id`
+from a populated legacy table, then runs the model twice with `ai_functions_enabled: true` to
+prove on-run-start migration and idempotence.
+
 ### 4.3 The content-hash delta step (embedding metadata)
 
 Whether a row whose *key* already exists but whose *source text changed* actually gets caught and

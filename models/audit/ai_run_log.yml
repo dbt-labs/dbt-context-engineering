@@ -3,7 +3,7 @@ models:
   - name: ai_run_log
     description: >
       Append-only, event-sourced log of every AI model run: model name, function, row count,
-      estimated tokens, estimated cost, timestamp, invocation id, and an event marking that row's
+      estimated tokens, estimated cost, timestamp, invocation id, the dbt node unique_id, and an event marking that row's
       place in the run's lifecycle. Reconciled against engine usage sources in Phase 3. Populated
       by log_ai_run (pre-hook or post-hook) and complete_ai_run (post-hook); see event below for
       the lifecycle.
@@ -36,3 +36,5 @@ models:
           - accepted_values:
               arguments:
                 values: ['started', 'completed']
+      - name: node_id
+        description: The dbt node unique_id whose hook wrote this row, matching node_id in warehouse query comments when available.

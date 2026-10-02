@@ -126,8 +126,8 @@ dbt build --project-dir integration_tests/cloud --target bigquery --full-refresh
 There is no CI job for this. The cloud suite runs locally, against your own profile, by following
 §4's cloud pass.
 
-Expected result: all models build and all **32** `assert_*` tests pass, for
-`TOTAL=144` per target (verified 2026-09-25 on Snowflake, Databricks, and BigQuery, under both
+Expected result: all models build and all **33** `assert_*` tests pass, for
+`TOTAL=145` per target (verified 2026-10-02 on Snowflake, Databricks, and BigQuery, under both
 dbt Core and dbt Fusion). A failure here is meaningful
 — it means a wrapper's dialect is wrong for that account, a model returned nothing, or the AI
 produced an off-taxonomy / ungrounded result. See §5.
@@ -218,7 +218,7 @@ conditionals in `dbt_project.yml`.
 | Extract | `extract` (LIVE), `extract_flat` (field flatten + source text) | `assert_wrappers_nonnull`, `assert_extract_conforms`, `assert_extract_grounded` | live |
 | Embed + retrieval | `embeddings`, `search` (LIVE) | `assert_search` | live |
 | Knowledge base | `kb`, `kb_hetero` (union over the embedded fixture) | `assert_kb`, `assert_kb_hetero` | live |
-| Run log | populated by `signals` post-hook → `ai_run_log` | `assert_run_log` | live |
+| Run log | populated by `signals` post-hook → `ai_run_log` | `assert_run_log`, `assert_run_log_node_id` | live |
 | Version guard | `versioned` (incremental, no AI; tag `version_guard`) | `assert_versioned` via the multi-run CI step (§4.1) | deterministic |
 | **Evaluation (P7)** | `eval_metrics` (no AI) | `assert_eval_metrics`, `assert_grounded`, `assert_conforms_catches` | deterministic |
 | **Output accessors** | `flatten` (from `generate`), `generate_text` (LIVE) | `assert_flatten_conforms`, `assert_generate_text` | live |
@@ -279,6 +279,12 @@ merge has already landed the new rows into `this` by the time a post-hook fires.
 temporarily switching `logged_delta` to the post-hook pattern locally: the phase-1 run is
 unaffected (first build has no filter to get the timing wrong), but the phase-2 run logs
 `row_count = 0` and `assert_logged_delta` fails.
+
+The singular test `assert_run_log_node_id` runs after `logged_model` and checks that both the
+`started` and `completed` rows for `model_name = 'test-model'` carry
+`node_id = 'model.duckdb_tests.logged_model'`. The deterministic CI job also removes `node_id`
+from a populated legacy table, then runs the model twice with `ai_functions_enabled: true` to
+prove on-run-start migration and idempotence.
 
 ### 4.3 The content-hash delta step (embedding metadata)
 
@@ -661,14 +667,14 @@ $DBT build $D --full-refresh          # back to PASS=201
 
 | # | Step | Assumes | Pass looks like |
 |---|---|---|---|
-| 1 | Full-refresh baseline: `$DBT build $C --full-refresh --vars '{ai_functions_enabled: true}'` | anything | `TOTAL=144`, ideally `PASS=144` |
+| 1 | Full-refresh baseline: `$DBT build $C --full-refresh --vars '{ai_functions_enabled: true}'` | anything | `TOTAL=145`, ideally `PASS=145` |
 | 2 | §4.1 version guard, v1 then v2 | step 1 | both runs green |
 | 3 | §4.3 content-hash delta phase 2 | a *fresh* step 1 | `row_count = 1` |
 | 4 | §4.5 chunk partition delta phase 2 | step 1 | per §4.5 |
 | 5 | §4.6 attach_metadata delta phase 2 | step 1 | per §4.6 |
 | 6 | §4.7 knowledge_base per-arm delta phase 2 | step 1 | per §4.7 |
 | 7 | §4.4 orphan sequence | step 1 | the `relationships` test **FAILS** |
-| 8 | **Cleanup rebuild (mandatory)** | step 7 | `TOTAL=144` again |
+| 8 | **Cleanup rebuild (mandatory)** | step 7 | `TOTAL=145` again |
 
 §4.1's cloud half used to run in a CI job. That job is gone (it never once executed and depended
 on a repo secret that never existed), so this pass is now the only thing covering it.
@@ -709,6 +715,7 @@ column names the problem (e.g. `wrong_top_hit`, `bad_accuracy`, `extract_null`).
 | `assert_kb` (LIVE) | 0 rows | `bad_row_count` (≠20) or `missing_source_type` → `knowledge_base`'s union/normalization didn't run as expected on this engine. `null_lineage_or_shape` → a common-shape column (source_id / account_key / embedding / text / source_type) came out null. |
 | `assert_run_log` (LIVE) | 0 rows | `no_classify_row` → `log_ai_run`'s post-hook INSERT never landed (hook error / ordering). `bad_values` → `row_count`≠10, `est_tokens` null/≤0, or `run_at` null → a cross-engine cast/typing problem in the log INSERT (the classic BigQuery pitfall). |
 | `assert_versioned` (multi-run) | 0 rows at each version | `wrong_version` after the v2 run → the guard did **not** reprocess on a version bump (delta filter wasn't skipped). `bad_count_or_dupes` → the `unique_key` merge duplicated instead of replacing. |
+| `assert_run_log_node_id` (LIVE) | 0 rows | `wrong_node_id` → a `classify` log row has a null `node_id` or one other than `model.cloud_tests.signals`, so the hook is not stamping the hooked node on this engine. `missing_event` → the `started` or `completed` row never landed for this invocation. |
 | `assert_run_log` (duckdb) | 0 rows | If it fails after a **repeat** build, it's the append-only log accumulating — rebuild with `--full-refresh` (see §2). |
 | `assert_content_hash_delta` (duckdb, multi-run, §4.3) | 0 rows | `wrong_row_count` ≠ 1 on the phase-2 run → the content-hash delta condition isn't isolating the single changed row (0 → frozen everything, 10 → reprocessed the whole corpus). `edited_row_not_reembedded` → the edited row's `embedded_at` didn't actually update, the delta predicate found it but the merge didn't touch it. |
 | `relationships_orphan_embeddings_chunk_id__...` (duckdb, multi-run, §4.4) | 0 rows normally; **expected to fail** after the deliberate re-chunk step | This is the one test in this file meant to fail on command. If it *doesn't* fail after §4.4's steps, the relationships test isn't actually catching the orphan. |

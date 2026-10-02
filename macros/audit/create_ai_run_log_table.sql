@@ -47,9 +47,16 @@
 -#}
 {% macro create_ai_run_log_table() -%}
     {%- if var('ai_functions_enabled', false) and execute -%}
+        {%- set log_relation = ref('ai_run_log') -%}
         {%- do run_query(
-            "create table if not exists " ~ ref('ai_run_log') ~ " as (" ~ dbt_context_engineering.ai_run_log_columns_sql() ~ ")"
+            "create table if not exists " ~ log_relation ~ " as (" ~ dbt_context_engineering.ai_run_log_columns_sql() ~ ")"
         ) -%}
+        {%- set log_columns = adapter.get_columns_in_relation(log_relation) -%}
+        {%- set column_names = '|' ~ (log_columns | map(attribute='name') | join('|') | lower) ~ '|' -%}
+        {%- if '|node_id|' not in column_names -%}
+            {%- do run_query("alter table " ~ log_relation ~ " add column node_id " ~ dbt.type_string()) -%}
+            {%- do adapter.commit() -%}
+        {%- endif -%}
     {%- endif -%}
     {#- The CREATE above runs via run_query(), a separate statement, not this return value.
         This macro is meant to be used standalone as an entire on-run-start hook, unlike the

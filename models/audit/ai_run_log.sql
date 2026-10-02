@@ -10,9 +10,10 @@
   invocation at event = 'completed'. If the model errors mid-run, dbt never runs that post_hook,
   so no 'completed' row ever appears for it. Nothing is ever mutated in place; completion is read
   by checking whether a matching 'completed' row exists, joined to its 'started' row on
-  invocation_id + function_name + model_name. The log persists and grows across dbt invocations
+  invocation_id + function_name + model_name + node_id. node_id is the dbt model unique_id that
+  wrote each hook row, matching the identifier stamped in query comments. The log persists and grows across dbt invocations
   (a full-refresh resets it).
 -#}
-{{ config(materialized='incremental') }}
+{{ config(materialized='incremental', on_schema_change='append_new_columns') }}
 
 {{ dbt_context_engineering.ai_run_log_columns_sql() }}

@@ -79,8 +79,11 @@
   null (left null when no price var is set).
 -#}
 {% macro log_ai_run(function_name, model_name=none, relation=none, input_column=none, filter=none) -%}
-    {#- No execute-guard: this macro only BUILDS an insert statement (dbt runs it as the hook), so
-        the ref() below must always render for dbt to infer the ai_run_log dependency. -#}
+    {#- No execute-guard: ref() must always render for dbt to infer the ai_run_log dependency.
+        The graph relation is the current target's configured location during execution. -#}
+    {%- set log_ref = ref('ai_run_log') -%}
+    {%- set configured_relation = dbt_context_engineering.ai_run_log_relation() -%}
+    {%- set log_relation = configured_relation if configured_relation is not none else log_ref -%}
     {%- set rel = relation if relation is not none else this -%}
     {%- set str_t = dbt.type_string() -%}
     {%- set num_t = dbt.type_numeric() -%}
@@ -100,7 +103,7 @@
         {%- set cost_expr = "cast(null as " ~ num_t ~ ")" -%}
     {%- endif -%}
 
-    insert into {{ ref('ai_run_log') }}
+    insert into {{ log_relation }}
         (invocation_id, model_name, function_name, row_count, est_tokens, est_cost, run_at, event, node_id)
     select
         '{{ invocation_id }}',

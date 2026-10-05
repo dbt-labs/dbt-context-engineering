@@ -46,8 +46,12 @@
   this package ships, same as that precedent.
 -#}
 {% macro create_ai_run_log_table() -%}
+    {#- Keep this ref unconditional so dbt can infer the hook's DAG dependency. The concrete
+        DDL target comes from the current target's graph node when execution is available. -#}
+    {%- set log_ref = ref('ai_run_log') -%}
+    {%- set configured_relation = dbt_context_engineering.ai_run_log_relation() -%}
+    {%- set log_relation = configured_relation if configured_relation is not none else log_ref -%}
     {%- if var('ai_functions_enabled', false) and execute -%}
-        {%- set log_relation = ref('ai_run_log') -%}
         {%- do run_query(
             "create table if not exists " ~ log_relation ~ " as (" ~ dbt_context_engineering.ai_run_log_columns_sql() ~ ")"
         ) -%}

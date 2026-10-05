@@ -286,6 +286,13 @@ The singular test `assert_run_log_node_id` runs after `logged_model` and checks 
 from a populated legacy table, then runs the model twice with `ai_functions_enabled: true` to
 prove on-run-start migration and idempotence.
 
+The `state deferral keeps the run log in the current target` CI step snapshots the build manifest,
+removes `node_id` and rows from the default target's log, and runs `logged_model` against the `ci`
+target with `--defer`. It checks that the default-target relation remains unchanged and that
+`ci_branch.ai_run_log` is created with `node_id` and exactly the two lifecycle rows. The
+`assert_run_log_target` singular test also runs with `logged_model` in a build invocation and
+returns zero rows when both lifecycle rows are present in the target relation.
+
 ### 4.3 The content-hash delta step (embedding metadata)
 
 Whether a row whose *key* already exists but whose *source text changed* actually gets caught and

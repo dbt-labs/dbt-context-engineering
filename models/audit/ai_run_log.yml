@@ -6,7 +6,8 @@ models:
       estimated tokens, estimated cost, timestamp, invocation id, the dbt node unique_id, and an event marking that row's
       place in the run's lifecycle. Reconciled against engine usage sources in Phase 3. Populated
       by log_ai_run (pre-hook or post-hook) and complete_ai_run (post-hook); see event below for
-      the lifecycle.
+      the lifecycle. The bootstrap and hook writes use the relation configured for the active
+      target, including when state deferral is enabled.
     columns:
       - name: invocation_id
         description: dbt invocation id for the run that produced the row.

@@ -174,6 +174,47 @@ jobs:
           connection.close()
           PY
 
+      - name: state deferral keeps the run log in the current target (duckdb)
+        # Snapshot the successful default-target manifest, then model a legacy production log.
+        # A selected model defers its unselected ai_run_log ref to that state, while bootstrap and
+        # hook writes must stay in the configured ci_branch schema.
+        run: |
+          STATE_DIR="$(mktemp -d)"
+          cp -R integration_tests/duckdb/target/. "$STATE_DIR/"
+          STATE_PATH="$(realpath "$STATE_DIR")"
+          python - <<'PY'
+          import duckdb
+          connection = duckdb.connect('target/tests.duckdb')
+          connection.execute('create schema if not exists ci_branch')
+          connection.execute('delete from main.ai_run_log')
+          connection.execute('alter table main.ai_run_log drop column node_id')
+          # dbt state deferral does not redirect seed refs, so put this synthetic fixture in the
+          # target schema before running the selected model.
+          connection.execute('create or replace table ci_branch.fixture_utterances as select * from main.fixture_utterances')
+          connection.close()
+          PY
+          dbt run --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+            --target ci --select logged_model --defer --state "$STATE_PATH" \
+            --vars '{ai_functions_enabled: true}'
+          python - <<'PY'
+          import duckdb
+          connection = duckdb.connect('target/tests.duckdb', read_only=True)
+          main_columns = {row[1].lower() for row in connection.execute("pragma table_info('main.ai_run_log')").fetchall()}
+          assert 'node_id' not in main_columns, f'deferred relation changed: {sorted(main_columns)}'
+          main_count = connection.execute('select count(*) from main.ai_run_log').fetchone()[0]
+          assert main_count == 0, f'deferred relation received {main_count} rows'
+          ci_columns = {row[1].lower() for row in connection.execute("pragma table_info('ci_branch.ai_run_log')").fetchall()}
+          assert 'node_id' in ci_columns, f'current-target log lacks node_id: {sorted(ci_columns)}'
+          rows = connection.execute("""
+              select event, node_id from ci_branch.ai_run_log
+              where model_name = 'test-model' and function_name = 'classify'
+          """).fetchall()
+          assert len(rows) == 2, rows
+          assert {event for event, _ in rows} == {'started', 'completed'}, rows
+          assert all(node_id == 'model.duckdb_tests.logged_model' for _, node_id in rows), rows
+          connection.close()
+          PY
+
       # ---- Safety-gate negative tests -------------------------------------------------------
       #
       # require_ai_functions_enabled, require_safe_materialization and require_full_refresh_gate

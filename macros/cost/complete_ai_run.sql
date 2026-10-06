@@ -31,11 +31,14 @@
     model_name     same value passed to the paired log_ai_run call. Optional.
 -#}
 {% macro complete_ai_run(function_name, model_name=none) -%}
-    {#- No execute-guard: the ref() below must always render for dbt to infer the ai_run_log
-        dependency, same as log_ai_run. -#}
+    {#- No execute-guard: ref() must always render for dbt to infer the ai_run_log dependency,
+        same as log_ai_run. The graph relation is the current target's configured location. -#}
+    {%- set log_ref = ref('ai_run_log') -%}
+    {%- set configured_relation = dbt_context_engineering.ai_run_log_relation() -%}
+    {%- set log_relation = configured_relation if configured_relation is not none else log_ref -%}
     {%- set model_sql = "'" ~ model_name ~ "'" if model_name is not none else "cast(null as " ~ dbt.type_string() ~ ")" -%}
     {%- set node_id_sql = "'" ~ model.unique_id ~ "'" if model is defined and model is not none else "cast(null as " ~ dbt.type_string() ~ ")" -%}
-    insert into {{ ref('ai_run_log') }}
+    insert into {{ log_relation }}
         (invocation_id, model_name, function_name, row_count, est_tokens, est_cost, run_at, event, node_id)
     select
         '{{ invocation_id }}',

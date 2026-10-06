@@ -255,7 +255,7 @@ Every public object. All are called **package-qualified** (`dbt_context_engineer
 
 **`complete_ai_run(function_name, model_name=none)`**: always safe as a post-hook; appends a **separate** `'completed'` row (never an `UPDATE`) once the model finishes, matched back to its `'started'` row on `invocation_id`/`function_name`/`model_name`/`node_id`. Completion rows can now also be matched on `node_id`, which distinguishes different dbt models making the same AI call. Event-sourced rather than a boolean flip, so two concurrent runs never contend for the same row ([ADR-0031](adr/0031-run-completion-as-an-event-sourced-append.md)).
 
-**`ai_run_log`** *(model)*: the append-only, event-sourced usage/cost log `log_ai_run` / `complete_ai_run` write to. `node_id` is the dbt node `unique_id` that wrote the row; it is the same identifier used by dbt platform query comments. `event` is `'started'` or `'completed'`; sizing columns are null on a `'completed'` row. The `node_id` column is last in the schema and is added to existing tables by the run-start bootstrap or when this model is built.
+**`ai_run_log`** *(model)*: the append-only, event-sourced usage/cost log `log_ai_run` / `complete_ai_run` write to. `node_id` is the dbt node `unique_id` that wrote the row; it is the same identifier used by dbt platform query comments. `event` is `'started'` or `'completed'`; sizing columns are null on a `'completed'` row. The `node_id` column is last in the schema and is added to existing tables by the run-start bootstrap or when this model is built. Bootstrap and hook writes stay in the active target, including when state deferral is enabled.
 
 #### Incremental / versioning (embed)
 

@@ -2,8 +2,8 @@
 -- per run (see ADR-0019). ai_run_log is append-only and grows across dbt builds, so this scopes to
 -- THIS invocation via invocation_id rather than a table-wide count (which fails on any second
 -- build). For this run it asserts exactly one classify 'started' row, valid and sized from the
--- seed using the same estimate_tokens / price the logger uses, plus exactly one matching
--- 'completed' row. Rows only on failure; expected values are computed, not magic numbers. The
+-- seed with the same estimate_call_tokens and price the logger uses, over the model's
+-- meta.ai_prompt prompt and schema, plus exactly one matching 'completed' row. Rows only on failure; expected values are computed, not magic numbers. The
 -- post-hook side effect is invisible to the DAG, so depend on the logging model to run after it:
 -- depends_on: {{ ref('logged_model') }}
 {% set price = var('cost_per_1k_tokens', none) %}
@@ -17,7 +17,7 @@ started as (
 expected as (
     select
         (select count(*) from {{ ref('fixture_utterances') }}) as exp_row_count,
-        (select coalesce(sum({{ dbt_context_engineering.estimate_tokens('utterance_text') }}), 0)
+        (select coalesce(sum({{ dbt_context_engineering.estimate_call_tokens('utterance_text', dbt_context_engineering.prompt('EXAMPLE_signal_classify', 'v3'), dbt_context_engineering.schema_def('EXAMPLE_signal_classify', 'v3')) }}), 0)
          from {{ ref('fixture_utterances') }}) as exp_est_tokens
 ),
 bad_count as (

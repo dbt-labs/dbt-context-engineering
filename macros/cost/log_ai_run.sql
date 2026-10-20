@@ -66,6 +66,11 @@
     relation       relation to size the batch from. Defaults to `this` (the built model); see
                    case 2 above, only sound on a fully-rebuilt materialization, as a post_hook.
     input_column   text column for the token estimate. If omitted, est_tokens/est_cost are null.
+    prompt, output_schema, output_tokens
+                   add the prompt template, the schema and an output allowance to the per-row
+                   estimate (estimate_call_tokens). prompt and output_schema default to the model's
+                   meta.ai_prompt. For generate/classify/extract with neither, est_tokens counts
+                   input text only and this hook emits a warning naming the model.
     filter         optional SQL predicate scoping the count to the rows the run ACTUALLY processed.
                    On an incremental model the body only touches the delta, so without this the log
                    records the whole corpus every run (row_count/est_tokens/est_cost off by orders
@@ -76,9 +81,9 @@
                    isn't carried into the output.
 
   est_cost = est_tokens / 1000 * var('cost_per_1k_tokens') when both are available; otherwise
-  null (left null when no price var is set).
+  null (left null when no price var is set). One price covers input and output tokens alike.
 -#}
-{% macro log_ai_run(function_name, model_name=none, relation=none, input_column=none, filter=none) -%}
+{% macro log_ai_run(function_name, model_name=none, relation=none, input_column=none, filter=none, prompt=none, output_schema=none, output_tokens=none) -%}
     {#- No execute-guard: ref() must always render for dbt to infer the ai_run_log dependency.
         The graph relation is the current target's configured location during execution. -#}
     {%- set log_ref = ref('ai_run_log') -%}
@@ -90,11 +95,22 @@
     {%- set model_sql = "'" ~ model_name ~ "'" if model_name is not none else "cast(null as " ~ str_t ~ ")" -%}
     {%- set node_id_sql = "'" ~ model.unique_id ~ "'" if model is defined and model is not none else "cast(null as " ~ str_t ~ ")" -%}
     {%- set price = var('cost_per_1k_tokens', none) -%}
+    {%- set call = dbt_context_engineering.resolve_call_prompt(prompt, output_schema) -%}
+
+    {#- A generative call billed for its prompt and reply, logged without the prompt: est_tokens
+        would silently undercount several-fold (ADR-0035). Warn loudly at run time. -#}
+    {%- if execute and function_name in ['generate', 'classify', 'extract'] and call[0] is none -%}
+        {%- do exceptions.warn(
+            "log_ai_run: " ~ (model.unique_id if model is defined and model is not none else this)
+            ~ " logs a " ~ function_name ~ " call with no prompt, so est_tokens counts input text "
+            ~ "only and understates spend. Set config(meta={'ai_prompt': {'name': ..., "
+            ~ "'version': ...}}) on the model or pass prompt= to log_ai_run.") -%}
+    {%- endif -%}
 
     {#- Size the batch with a SINGLE scan of the relation (derived table _sz), then reference its
         columns below — count and token-sum are computed once, not once per output column. -#}
     {%- if input_column is not none -%}
-        {%- set sz_select = "count(*) as _n, coalesce(sum(" ~ dbt_context_engineering.estimate_tokens(input_column) ~ "), 0) as _toks" -%}
+        {%- set sz_select = "count(*) as _n, coalesce(sum(" ~ dbt_context_engineering.estimate_call_tokens(input_column, call[0], call[1], output_tokens) ~ "), 0) as _toks" -%}
         {%- set tokens_expr = "cast(_sz._toks as " ~ num_t ~ ")" -%}
         {%- set cost_expr = ("cast(_sz._toks / 1000.0 * " ~ price ~ " as " ~ num_t ~ ")") if price is not none else ("cast(null as " ~ num_t ~ ")") -%}
     {%- else -%}

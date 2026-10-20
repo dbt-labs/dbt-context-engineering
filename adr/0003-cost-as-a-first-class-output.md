@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted, 2026-07-30.
+Superseded by [ADR-0035](0035-per-call-token-estimate-for-the-guard-and-the-log.md), 2026-10-20, on
+`guard_batch` counting input tokens only. Everything else below (the guard, the run log, the
+output-side caps) still stands.
 
 ## Concept
 

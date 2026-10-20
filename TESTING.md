@@ -728,6 +728,8 @@ column names the problem (e.g. `wrong_top_hit`, `bad_accuracy`, `extract_null`).
 | `assert_content_hash_delta` (duckdb, multi-run, §4.3) | 0 rows | `wrong_row_count` ≠ 1 on the phase-2 run → the content-hash delta condition isn't isolating the single changed row (0 → frozen everything, 10 → reprocessed the whole corpus). `edited_row_not_reembedded` → the edited row's `embedded_at` didn't actually update, the delta predicate found it but the merge didn't touch it. |
 | `relationships_orphan_embeddings_chunk_id__...` (duckdb, multi-run, §4.4) | 0 rows normally; **expected to fail** after the deliberate re-chunk step | This is the one test in this file meant to fail on command. If it *doesn't* fail after §4.4's steps, the relationships test isn't actually catching the orphan. |
 | circuit-breaker trip (§2) | **non-zero exit** | If it exits 0, `guard_batch` failed to raise over the ceiling. |
+| `assert_call_tokens` (duckdb + LIVE, no AI call) | 0 rows | `wrong_est_tokens` → `log_ai_run` reading the prompt from `meta.ai_prompt` did not add the prompt template, schema and output allowance to every row, so `est_tokens` counts input text only, or BigQuery's `augment_prompt` block was not counted. `missing_started` → the `logged_prompted` post-hook never landed. |
+| `logged_unprompted` warning (duckdb CI step, `--vars '{warn_probe: true}'`) | build passes **and** prints `logs a generate call with no prompt` | No warning → `log_ai_run` does not flag a generative call logged without a prompt, so an input-only `est_tokens` would go unnoticed. The model is disabled in a normal build so the warning never stands. |
 
 > **Snowflake only: a transient null from `generate` and `extract`.**
 >

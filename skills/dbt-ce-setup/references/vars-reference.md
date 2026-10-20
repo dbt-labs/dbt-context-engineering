@@ -18,14 +18,15 @@ Every configuration `var` the package reads, its default, and what it controls. 
 |---|---|---|
 | `ai_functions_enabled` | `false` | master gate. AI functions raise a compiler error unless this is `true` for the target. |
 | `max_batch_rows` | `10000` | `guard_batch` ceiling on input rows; raises before the model runs if exceeded. |
-| `max_est_tokens` | `5000000` | `guard_batch` ceiling on estimated input tokens. |
+| `max_est_tokens` | `5000000` | `guard_batch` ceiling on estimated tokens: input text, plus the prompt template and output allowance when the guard is given a `prompt`. |
+| `est_output_tokens_per_row` | `null` | per-row output allowance in the estimate when a `prompt` is passed. `null` falls back to `max_output_tokens`, then 0. |
 | `max_agg_group_tokens` | `100000` | `guard_agg_batch` per-group ceiling for `ai_agg` (required on Databricks). |
 | `allow_full_reembed` | (unset) | wire to an incremental AI model's `full_refresh` config so a stray `--full-refresh` can't re-bill the corpus. |
 | `ai_sample_rows` | `null` | `dev_sample_filter` row cap. A dev convenience, **not** a spend guard. |
 
 ## Output-side cost control
 
-`guard_batch` bounds input tokens only; these cap the response side.
+`guard_batch` can only estimate output before the run; these cap the response side.
 
 | var | default | controls |
 |---|---|---|

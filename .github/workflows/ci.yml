@@ -389,10 +389,9 @@ jobs:
       - name: parse (renders wrapper dispatch; no warehouse connection)
         run: dbt parse --project-dir integration_tests/cloud --profiles-dir ci --target ${{ matrix.adapter }}
 
-  # Fusion gate (ADR-0032), duckdb side. Same shape as `deterministic-tests`, on Fusion. Excludes
-  # embedding_canary_baseline and its dependent test: Fusion's duckdb adapter cannot load a
-  # package-owned seed (dbt-core#16128 / dbt-context-engineering#18), a confirmed upstream engine
-  # bug, not a regression in this package's code. Remove the --exclude once that's fixed upstream.
+  # Fusion gate (ADR-0032), duckdb side. Same shape as `deterministic-tests`, on Fusion. Builds the
+  # package-owned embedding_canary_baseline seed too, which Fusion's duckdb adapter could not load
+  # before dbt 2.0.9 (dbt-core#16128 / dbt-context-engineering#18).
   fusion-deterministic-tests:
     runs-on: ubuntu-latest
     steps:
@@ -409,8 +408,7 @@ jobs:
         run: |
           mkdir -p target
           dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
-            --full-refresh \
-            --exclude embedding_canary_baseline assert_embedding_canary_matches_baseline
+            --full-refresh
 
   # Root-package parse gate: parse THIS package's own dbt_project.yml directly, with none of its
   # null model/embedding vars overridden — the exact experience of a fresh consumer who adds this

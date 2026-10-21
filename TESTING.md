@@ -204,6 +204,7 @@ fix the one line).
 | `create_vector_index` (no warehouse) | none (run-operation only) | `assert_create_vector_index_ddl` for the Snowflake and BigQuery DDL text, plus the three `probe_create_vector_index_*` raise probes. All CI steps |
 | Canary re-bless serializer | `embedding_canary` | `assert_canary_vector_roundtrip`, plus a CI step running `print_embedding_canary` itself |
 | **Decision models (ADR-0036)** | `decide_answers_test` (seeded `ai_decide` results); `probe_decide_unsupported`, `probe_decide_questions` (disabled unless selected) | `assert_decide_answers`; the probes are CI steps matching each error message |
+| Evaluation by confidence bucket | `eval_confidence_preds`, `eval_confidence` | `assert_eval_confidence` |
 
 ### `integration_tests/cloud` (`--target snowflake` / `databricks` / `bigquery`) — real warehouse
 
@@ -736,6 +737,7 @@ column names the problem (e.g. `wrong_top_hit`, `bad_accuracy`, `extract_null`).
 | `assert_decide` (LIVE, Databricks only) | 0 rows | `bad_answer` → an `ai_decide` row errored, returned a choice outside the question's labels, a confidence or probability outside 0..1, per-label probabilities not summing to 1, or a score off the 0..2 rubric. Nulls across the board → the `response.answers` path changed. Disabled where `decide_available()` is false. |
 | `assert_decide_call_tokens` (LIVE, Databricks only) | 0 rows | `wrong_est_tokens` → `log_ai_run('decide')` did not add the questions JSON to every row, or applied `max_output_tokens` as an output allowance. `missing_started` → the `decide` post-hook never landed. |
 | `decide` negative probes (duckdb CI steps) | **non-zero exit** with the expected message | `probe_decide_unsupported` must name `classify()`; `probe_decide_questions` covers seven malformed question sets. A different message means a different check fired first. |
+| `assert_eval_confidence` (duckdb) | 0 rows | A metric:bucket row → `eval`'s confidence bucketing or per-bucket accuracy/count is off, or an empty bucket emitted a row. |
 
 > **Snowflake only: a transient null from `generate` and `extract`.**
 >

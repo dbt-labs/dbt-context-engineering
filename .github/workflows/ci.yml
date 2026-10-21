@@ -296,6 +296,29 @@ jobs:
           ci/expect_failure.sh "exceed max_agg_group_tokens" \
             dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
               --select guard_agg_pass --vars '{max_agg_group_tokens: 1}'
+      - name: decide raises on an engine without a decision model, naming classify
+        # duckdb is such an engine. ai_functions_enabled is set so the spend gate stays quiet and
+        # the message proves the availability check fired, not the gate.
+        run: |
+          ci/expect_failure.sh "decide() is not supported on the 'duckdb' adapter" \
+            dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+              --select probe_decide_unsupported --vars '{gate_probe: decide_unsupported, ai_functions_enabled: true}'
+      - name: decide rejects malformed questions at compile time
+        # One malformed question set per case, each asserting its own message. The choice cap is
+        # passed as 2 by the probe, since duckdb has no engine cap.
+        run: |
+          check() {
+            ci/expect_failure.sh "$2" \
+              dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+                --select probe_decide_questions --vars "{gate_probe: decide_questions, decide_case: $1}"
+          }
+          check bad_type "type must be noul, choice or score"
+          check no_criteria "needs criteria as a non-empty label"
+          check over_cap "has 3 labels"
+          check score_levels "list of 2 to 10 levels"
+          check bad_id "must be letters, digits and underscores"
+          check extra_field "unsupported field(s) options"
+          check noul_keys "may only hold 'true' and 'false'"
 
       # ---- Coverage for package code that ships but no model calls --------------------------
       - name: no_oversized_chunks catches an oversized chunk

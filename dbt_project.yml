@@ -30,6 +30,14 @@ vars:
   model_classify: null
   model_extract: null
 
+  # decide (decision models): most labels a choice question may carry, from each engine's
+  # documented limit. Raise only if the engine's own limit has been raised.
+  decide_choice_cap_databricks: 255
+  decide_choice_cap_snowflake: 32
+  # Snowflake Decision is in private preview and unvalidated here; true opts an account with
+  # preview access into decide() on Snowflake.
+  decide_snowflake_preview: false
+
   # Embeddings — pinned. A corpus embedded by one model cannot be searched by another.
   embedding_model: null
 

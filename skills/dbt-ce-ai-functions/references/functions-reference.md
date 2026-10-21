@@ -105,6 +105,35 @@ Set `var: max_agg_group_tokens` accordingly (see `dbt-ce-setup`).
 If order within a group matters and you target Snowflake, sort in a CTE first rather than relying
 on `order_column`.
 
+## decide
+
+```
+decide(state_column, questions)
+decide_answer(decision, question, field, as_type=none)   decide_error(decision)   decide_model(decision)
+```
+- `questions`: dict keyed by question id (letters, digits, underscores). Each has `type`,
+  `instructions` and `criteria`:
+  - `choice`: `criteria` maps label to description, 1 to `decide_choice_cap_<engine>` labels
+    (Databricks 255, Snowflake 32). Fields: `choice`, `confidence`, `probabilities`,
+    `probabilities.<label>`.
+  - `noul`: optional `criteria` with `true` / `false` descriptions. Field: `probability`.
+  - `score`: `criteria` is a list of 2-10 levels, lowest first. Fields: `score`, `confidence`,
+    `legend`, `probabilities`.
+- Malformed questions fail at compile time.
+- Returns the raw engine result. Materialize it, then read fields in a downstream model; reading
+  several fields of a `decide()` call in one query can call the model once per field.
+- Engines: Databricks `ai_decide` (Beta). Snowflake `AI_COMPLETE('snowflake-decision')`, private
+  preview, only with `decide_snowflake_preview: true`, unvalidated. BigQuery: none; raises, naming
+  `classify`. `decide_available()` reports which applies.
+- `decide_error` is Databricks' per-row `error_message` (Snowflake fails the query instead).
+  `decide_model` is `ai_decide/<function version>` on Databricks; neither engine exposes a
+  versioned model id.
+- Cost: `log_ai_run('decide', ..., prompt=tojson(questions))` counts the questions on every row
+  with no output allowance, since a decision model returns typed answers rather than generated
+  text. Neither engine publishes how `decide` is billed, so treat its `est_tokens` as request size.
+- Define the questions in a macro in your project and call it from the body and both hooks, so all
+  three share one definition. Inline questions in the body cannot be reached from a hook.
+
 ## Reading structured output
 
 | helper | returns |

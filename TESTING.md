@@ -203,6 +203,7 @@ fix the one line).
 | Safety-gate raise paths | `probe_ai_gate`, `probe_view_gate`, `probe_full_refresh_gate` (disabled unless their `gate_probe` var selects them) | CI steps only, each matching the gate's error message rather than inverting an exit code |
 | `create_vector_index` (no warehouse) | none (run-operation only) | `assert_create_vector_index_ddl` for the Snowflake and BigQuery DDL text, plus the three `probe_create_vector_index_*` raise probes. All CI steps |
 | Canary re-bless serializer | `embedding_canary` | `assert_canary_vector_roundtrip`, plus a CI step running `print_embedding_canary` itself |
+| **Decision models (ADR-0036)** | `decide_answers_test` (seeded `ai_decide` results); `probe_decide_unsupported`, `probe_decide_questions` (disabled unless selected) | `assert_decide_answers`; the probes are CI steps matching each error message |
 
 ### `integration_tests/cloud` (`--target snowflake` / `databricks` / `bigquery`) — real warehouse
 
@@ -235,6 +236,7 @@ conditionals in `dbt_project.yml`.
 | Groundedness generic test (`grounded`) | `extract_flat` | the `grounded` wrapper itself, `allow_empty: true`. `assert_extract_grounded` alongside it checks the same property by calling the internals directly, so the pair covers both the internals and the wrapper a consumer writes | live |
 | Embedding logic hash as an audit column (ADR-0025) | `embedding_canary` | `assert_embedding_logic_hash_lands` + `not_null` | deterministic |
 | Canary re-bless serializer | `embedding_canary` | `assert_canary_vector_roundtrip`. This is where each engine's own `canary_vector_to_json` is proven to round-trip a real vector, which is what a pasted baseline depends on | live |
+| **Decision models (ADR-0036)** | `decide` (LIVE, Databricks only: enabled where `decide_available()`), `decide_flat` | `assert_decide`, `assert_decide_call_tokens` (both disabled where `decide` is unavailable) | live |
 
 ### 4.1 The multi-run version-guard step
 
@@ -730,6 +732,10 @@ column names the problem (e.g. `wrong_top_hit`, `bad_accuracy`, `extract_null`).
 | circuit-breaker trip (§2) | **non-zero exit** | If it exits 0, `guard_batch` failed to raise over the ceiling. |
 | `assert_call_tokens` (duckdb + LIVE, no AI call) | 0 rows | `wrong_est_tokens` → `log_ai_run` reading the prompt from `meta.ai_prompt` did not add the prompt template, schema and output allowance to every row, so `est_tokens` counts input text only, or BigQuery's `augment_prompt` block was not counted. `missing_started` → the `logged_prompted` post-hook never landed. |
 | `logged_unprompted` warning (duckdb CI step, `--vars '{warn_probe: true}'`) | build passes **and** prints `logs a generate call with no prompt` | No warning → `log_ai_run` does not flag a generative call logged without a prompt, so an input-only `est_tokens` would go unnoticed. The model is disabled in a normal build so the warning never stands. |
+| `assert_decide_answers` (duckdb, no AI call) | 0 rows | `wrong_success_row` → `decide_answer`'s default (JSON) path misread a choice, noul or score field from the Databricks envelope, or a `probabilities.<label>` path. `wrong_error_row` → `decide_error` did not return `error_message`, or a failed row leaked an answer. |
+| `assert_decide` (LIVE, Databricks only) | 0 rows | `bad_answer` → an `ai_decide` row errored, returned a choice outside the question's labels, a confidence or probability outside 0..1, per-label probabilities not summing to 1, or a score off the 0..2 rubric. Nulls across the board → the `response.answers` path changed. Disabled where `decide_available()` is false. |
+| `assert_decide_call_tokens` (LIVE, Databricks only) | 0 rows | `wrong_est_tokens` → `log_ai_run('decide')` did not add the questions JSON to every row, or applied `max_output_tokens` as an output allowance. `missing_started` → the `decide` post-hook never landed. |
+| `decide` negative probes (duckdb CI steps) | **non-zero exit** with the expected message | `probe_decide_unsupported` must name `classify()`; `probe_decide_questions` covers seven malformed question sets. A different message means a different check fired first. |
 
 > **Snowflake only: a transient null from `generate` and `extract`.**
 >

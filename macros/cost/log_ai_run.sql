@@ -61,7 +61,7 @@
        ]) }}
 
   Args:
-    function_name  which function issued the call (generate/classify/extract/embed). Required.
+    function_name  which function issued the call (generate/classify/extract/embed/decide). Required.
     model_name     the AI model used (the largest cost lever, always logged). Optional.
     relation       relation to size the batch from. Defaults to `this` (the built model); see
                    case 2 above, only sound on a fully-rebuilt materialization, as a post_hook.
@@ -70,7 +70,11 @@
                    add the prompt template, the schema and an output allowance to the per-row
                    estimate (estimate_call_tokens). prompt and output_schema default to the model's
                    meta.ai_prompt. For generate/classify/extract with neither, est_tokens counts
-                   input text only and this hook emits a warning naming the model.
+                   input text only and this hook emits a warning naming the model. For decide, pass
+                   prompt=tojson(questions): the questions are sent with every row. decide's output
+                   allowance defaults to 0, since a decision model returns typed answers, not generated
+                   text. Neither engine publishes how decide is billed, so for decide est_tokens
+                   measures the size of each request, not a bill.
     filter         optional SQL predicate scoping the count to the rows the run ACTUALLY processed.
                    On an incremental model the body only touches the delta, so without this the log
                    records the whole corpus every run (row_count/est_tokens/est_cost off by orders
@@ -96,6 +100,7 @@
     {%- set node_id_sql = "'" ~ model.unique_id ~ "'" if model is defined and model is not none else "cast(null as " ~ str_t ~ ")" -%}
     {%- set price = var('cost_per_1k_tokens', none) -%}
     {%- set call = dbt_context_engineering.resolve_call_prompt(prompt, output_schema) -%}
+    {%- if function_name == 'decide' and output_tokens is none -%}{%- set output_tokens = 0 -%}{%- endif -%}
 
     {#- A generative call billed for its prompt and reply, logged without the prompt: est_tokens
         would silently undercount several-fold (ADR-0035). Warn loudly at run time. -#}
@@ -105,6 +110,12 @@
             ~ " logs a " ~ function_name ~ " call with no prompt, so est_tokens counts input text "
             ~ "only and understates spend. Set config(meta={'ai_prompt': {'name': ..., "
             ~ "'version': ...}}) on the model or pass prompt= to log_ai_run.") -%}
+    {%- endif -%}
+    {%- if execute and function_name == 'decide' and call[0] is none -%}
+        {%- do exceptions.warn(
+            "log_ai_run: " ~ (model.unique_id if model is defined and model is not none else this)
+            ~ " logs a decide call with no questions, so est_tokens counts input text only and "
+            ~ "understates spend. Pass prompt=tojson(questions) to log_ai_run.") -%}
     {%- endif -%}
 
     {#- Size the batch with a SINGLE scan of the relation (derived table _sz), then reference its

@@ -185,6 +185,7 @@ Semantic search is deliberately the simple route through. Behind it we mapped th
 | Typed extraction | Pulls facts present in the text into typed fields, each with an evidence quote | `extract` | **Beta** |
 | Portable AI output | Reads a structured AI result back as a plain scalar, identically on every engine | `text`, `field` | **Beta** |
 | Group-level reasoning | Reasons across every row in a group at once, instead of row by row | `ai_agg`, `guard_agg_batch` | **Beta** |
+| Decision models | Answers typed questions per row (choice, yes/no, score) with a probability and a confidence instead of text. Databricks; Snowflake opt-in (private preview); not BigQuery | `decide`, `decide_answer`, `decide_error` | **Beta** |
 | Managed / scaled vector index | Opt-in managed index for scale; separately billed, charges while idle, never automatic | `create_vector_index` | **Beta** |
 | Runtime drift monitoring | Re-embeds frozen probes each build, catching a provider silently returning different vectors | `embedding_canary` | **Beta** |
 
@@ -194,6 +195,7 @@ These are not extras or afterthoughts. They are capabilities we know context eng
 
 - **`generate`** / **`extract`**: the other two row-level AI operations. `generate` is free-form generation (plain text or a structured object); `extract` pulls a typed record of fields present in the text. `classify` (the precision unlock above) covers the closed-set-label case; reach for these when you need free text or a multi-field typed extraction. See [ADR-0010](adr/0010-four-ai-operations.md). Read structured results back portably with `text()` / `field()` ([ADR-0008](adr/0008-normalizing-ai-output.md)).
 - **`ai_agg`**: group-level aggregation (summarize a whole transcript, roll up sentiment across an account). Cross-adapter behavior diverges the most here; pair with `guard_agg_batch` on Databricks. See [ADR-0028](adr/0028-add-ai-agg-group-level-aggregation.md).
+- **`decide`**: decision models, a sixth row-level operation. Ask typed questions about each row and get back a choice with a probability per label and a confidence, a yes/no probability, or a score on a rubric. Runs on Databricks (`ai_decide`, Beta). On Snowflake, Snowflake Decision is in private preview: the path is written but disabled until an account with access sets `decide_snowflake_preview: true`. **BigQuery has no decision model**, and `decide()` stops with a message pointing to `classify()`. See [ADR-0036](adr/0036-decide-a-decision-model-operation.md).
 - **`create_vector_index`**: opt-in, `dbt run-operation` **only** (never a model). Builds the engine's external, separately-billed index/service (Snowflake Cortex Search, BigQuery vector index; Databricks via its Vector Search API) for scale beyond the brute-force default. Stateful, with idle-serving cost, so drop it explicitly. See [ADR-0005](adr/0005-retrieval-brute-force-default-index-opt-in.md).
 - **`embedding_canary`**: runtime drift monitor. Re-embeds a small fixed probe set and compares it against a blessed baseline by cosine similarity, catching a provider silently changing a pinned model's behavior. **Disabled by default** (`monitoring: +enabled: false`); it makes real `embed()` calls, so add it only to a scheduled production job. Its baseline seed ships disabled the same way, so turning the monitor on also means setting `seeds: dbt_context_engineering: +enabled: true`, or `dbt build`/`dbt seed` won't have the baseline to compare against. See [ADR-0026](adr/0026-embedding-canary-runtime-drift-monitor.md).
 
@@ -255,7 +257,7 @@ Every public object. All are called **package-qualified** (`dbt_context_engineer
 
 **`dev_sample_filter(row_limit=none)`**: a portable `qualify row_number() … <= n` clause that caps a model to a random `row_limit` rows (or `var('ai_sample_rows')` if unset). Append it to a model's final `select` while iterating, so nothing is metered or billed against the full corpus by accident.
 
-**`log_ai_run(function_name, model_name=none, relation=none, input_column=none, filter=none, prompt=none, output_schema=none, output_tokens=none)`**: pre- or post-hook (see [ADR-0022](adr/0022-log-ai-run-hook-phase-follows-what-this-means.md) for which one); appends a `'started'` row to `ai_run_log` with the batch's sizing (row count, estimated tokens/cost, sized like `guard_batch`; logging a `generate` / `classify` / `extract` call with no prompt from either source emits a warning naming the model) and the dbt node's `unique_id` in `node_id`. Node IDs match the `node_id` stamped in dbt platform query comments, so log rows can be joined to warehouse usage history. The consumer's `create_ai_run_log_table()` on-run-start hook bootstraps the table and adds `node_id` to existing tables.
+**`log_ai_run(function_name, model_name=none, relation=none, input_column=none, filter=none, prompt=none, output_schema=none, output_tokens=none)`**: pre- or post-hook (see [ADR-0022](adr/0022-log-ai-run-hook-phase-follows-what-this-means.md) for which one); appends a `'started'` row to `ai_run_log` with the batch's sizing (row count, estimated tokens/cost, sized like `guard_batch`; logging a `generate` / `classify` / `extract` call with no prompt from either source, or a `decide` call with no questions, emits a warning naming the model; `decide` defaults to no output allowance) and the dbt node's `unique_id` in `node_id`. Node IDs match the `node_id` stamped in dbt platform query comments, so log rows can be joined to warehouse usage history. The consumer's `create_ai_run_log_table()` on-run-start hook bootstraps the table and adds `node_id` to existing tables.
 
 **`complete_ai_run(function_name, model_name=none)`**: always safe as a post-hook; appends a **separate** `'completed'` row (never an `UPDATE`) once the model finishes, matched back to its `'started'` row on `invocation_id`/`function_name`/`model_name`/`node_id`. Completion rows can now also be matched on `node_id`, which distinguishes different dbt models making the same AI call. Event-sourced rather than a boolean flip, so two concurrent runs never contend for the same row ([ADR-0031](adr/0031-run-completion-as-an-event-sourced-append.md)).
 
@@ -305,6 +307,10 @@ Every public object. All are called **package-qualified** (`dbt_context_engineer
 
 **`guard_agg_batch(relation, input_column, group_by_column, filter=none)`**: grouped counterpart to `guard_batch` for `ai_agg`; sums estimated tokens per group and raises on `max_agg_group_tokens`.
 
+**`decide(state_column, questions)`**: decision-model operation. `questions` is a dict keyed by question id, each with `type` (`choice` / `noul` / `score`), `instructions` and `criteria`, validated at compile time; a choice may carry up to `decide_choice_cap_<engine>` labels (255 Databricks, 32 Snowflake). Returns the engine's raw result. Databricks `ai_decide`; Snowflake `AI_COMPLETE('snowflake-decision')` only with `decide_snowflake_preview: true`; raises elsewhere, naming `classify()`. Log it with `log_ai_run('decide', ..., prompt=tojson(questions))`.
+
+**`decide_answer(decision, question, field, as_type=none)`** / **`decide_error(decision)`** / **`decide_model(decision)`**: read a `decide` result portably: `choice`, `confidence`, `probabilities`, `probabilities.<label>`, `score`, `legend`, `probability`; the engine's per-row error; what the engine reports about the model (Databricks: the function version only). `decide_available()` says whether `decide` runs on the current target.
+
 **`create_vector_index(name, relation, column, attributes=[], warehouse=none, target_lag='1 day', embedding_model=none, distance_type='COSINE', index_type='IVF', storing=[])`**: **opt-in, `dbt run-operation` ONLY**. Builds the engine's external, separately-billed index/service. Drop it explicitly.
 
 **`embedding_canary`** *(model, disabled by default)*: runtime drift monitor; re-embeds a fixed probe set and compares to a blessed baseline by cosine similarity.
@@ -340,7 +346,7 @@ All divergent prerequisites are `vars` (see `dbt_project.yml`), visible and docu
 
 ```
 macros/
-  functions/               # generate/classify/extract/embed (adapter.dispatch) + prereq checks
+  functions/               # generate/classify/extract/embed/decide (adapter.dispatch) + prereq checks
   prompts/                 # prompt / schema_def (macro-library loader, ADR-0001) + render_prompt + config_prompt / config_schema
   chunking/                # chunk (unit packing, incremental-aware) + split_sentences + no_oversized_chunks + array_agg/string_agg
   metadata/                # attach_metadata (join source-level metadata onto chunks)

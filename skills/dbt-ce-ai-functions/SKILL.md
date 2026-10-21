@@ -1,6 +1,6 @@
 ---
 name: dbt-ce-ai-functions
-description: "Use the row-level AI functions from the dbt_context_engineering package in a consuming dbt project: generate (free-form/structured text), classify (single label from a taxonomy), extract (typed structured records), and ai_agg (group-level LLM aggregation), plus authoring the versioned prompt and schema macros they require in your own project and reading structured output back with text() and field(). Use whenever a user wants an LLM to run over their rows in dbt: 'classify each ticket by priority', 'extract facts/fields from documents', 'summarize each call', 'tag rows with a category', 'pull structured JSON out of text', 'aggregate a group with an LLM', 'write a prompt for classify', or 'version my prompts'. Trigger even when the user names only the task ('label these', 'summarize each') without naming a function. For embedding and semantic search see dbt-ce-pipeline; for install and model/cost vars see dbt-ce-setup."
+description: "Use the row-level AI functions from the dbt_context_engineering package in a consuming dbt project: generate (free-form/structured text), classify (single label from a taxonomy), extract (typed structured records), ai_agg (group-level LLM aggregation), and decide (decision models with confidence), plus authoring the versioned prompt and schema macros they require in your own project and reading structured output back with text() and field(). Use whenever a user wants an LLM to run over their rows in dbt: 'classify each ticket by priority', 'extract facts/fields from documents', 'summarize each call', 'tag rows with a category', 'pull structured JSON out of text', 'aggregate a group with an LLM', 'classify with a confidence score', 'write a prompt for classify', or 'version my prompts'. Trigger even when the user names only the task ('label these', 'summarize each') without naming a function. For embedding and semantic search see dbt-ce-pipeline; for install and model/cost vars see dbt-ce-setup."
 ---
 
 # Row-level AI functions with dbt_context_engineering
@@ -21,7 +21,7 @@ Two things are true of **every** function here:
    scheduled/large job, make it incremental and attach a cost guard + run log (see
    `dbt-ce-pipeline`'s `references/governance-incremental.md`).
 
-## The four functions
+## The functions
 
 Full signatures, output shapes, and per-engine notes are in
 `references/functions-reference.md`. At a glance:
@@ -32,6 +32,7 @@ Full signatures, output shapes, and per-engine notes are in
 | `classify` | pick **one** label from a closed set | a scalar string label | **required** |
 | `extract` | pull typed fields/records out of text | a structured record | **required** |
 | `ai_agg` | reason across a whole **group** at once | text per group (`GROUP BY`) | none (plain instruction) |
+| `decide` | answer typed questions with a probability and confidence (decision model) | raw result, read with `decide_answer()` | questions dict (no schema) |
 
 ### classify — one label from a taxonomy
 
@@ -67,6 +68,25 @@ rather than plain text. Read plain text back with `text()`, structured fields wi
 **plain instruction string, not a template** (no `{{ input }}` placeholder). On Databricks it
 has no internal map-reduce, so guard each group with `guard_agg_batch` (see `dbt-ce-setup`'s
 `max_agg_group_tokens`).
+
+### decide: decision models (Databricks; Snowflake opt-in; not BigQuery)
+
+`decide` asks a decision model typed questions per row: `choice` (one described label, with a
+probability per label and a confidence), `noul` (probability a statement is true) or `score`
+(position on an ordered rubric). It returns the engine's raw result; store it in one model and
+read fields in another with `decide_answer(col, question, field, as_type)`, so the model is called
+once per row. Runs on Databricks (`ai_decide`). On Snowflake it is off unless the account has
+Snowflake Decision preview access and sets `decide_snowflake_preview: true`. On BigQuery it raises
+and points to `classify`. Log it with `log_ai_run('decide', ..., prompt=tojson(questions))`.
+
+```sql
+select utterance_id,
+    {{ dbt_context_engineering.decide('utterance_text', {
+        'topic': {'type': 'choice', 'instructions': 'Main topic?',
+                  'criteria': {'billing': 'Payments, refunds', 'technical': 'Bugs, outages'}}
+    }) }} as d
+from {{ ref('stg_utterances') }}
+```
 
 ## Authoring prompts & schemas (this lives in YOUR project)
 
@@ -141,7 +161,7 @@ Wrapper outputs have per-engine shapes; two helpers normalize reading them:
 ## Reference files
 
 - `references/functions-reference.md` — exact signatures, required vs optional args, output
-  shapes, reading-back helpers, and per-engine notes for generate/classify/extract/ai_agg.
+  shapes, reading-back helpers, and per-engine notes for generate/classify/extract/ai_agg/decide.
 - `references/prompts-and-schemas.md` — authoring `prompt__`/`schema__` macros, the
   `{{ input }}` placeholder, enum-as-single-source-of-truth, versioning discipline, and why
   they live in the consuming project.

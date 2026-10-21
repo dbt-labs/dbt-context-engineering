@@ -45,6 +45,7 @@ just record the choice.
 | [0028](0028-add-ai-agg-group-level-aggregation.md) | Add `ai_agg`: a fifth operation for group-level LLM aggregation | Accepted |
 | [0032](0032-dbt-version-floor-and-fusion-support.md) | Raising the dbt version floor and declaring Fusion support | Accepted |
 | [0035](0035-per-call-token-estimate-for-the-guard-and-the-log.md) | Estimate the whole AI call per row, with the prompt named once in model meta | Accepted |
+| [0036](0036-decide-a-decision-model-operation.md) | Add `decide`: a sixth operation for decision models | Accepted |
 
 ## New here? A reading path
 
@@ -60,6 +61,7 @@ of the discipline.
    - [0028](0028-add-ai-agg-group-level-aggregation.md), a fifth: asking a model to reason across a
      whole group at once, and why Databricks needed a bounded design rather than full parity
    - [0008](0008-normalizing-ai-output.md) — reading the AI's answer back out
+   - [0036](0036-decide-a-decision-model-operation.md), a sixth: decision models, which answer typed questions with a probability and a confidence instead of text
 2. **Preparing the text.**
    - [0002](0002-chunking-as-token-bounded-unit-packing.md) — chunking (and what an *embedding* is)
    - [0013](0013-attach-metadata-as-a-separate-macro.md) — attaching source metadata onto chunks

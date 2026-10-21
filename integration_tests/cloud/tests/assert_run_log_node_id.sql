@@ -3,6 +3,9 @@
 -- model's unique_id. Scoped to THIS invocation because ai_run_log grows across builds.
 -- depends_on: {{ ref('signals') }}
 {% set expected_node_id = 'model.' ~ project_name ~ '.signals' %}
+{#- Scoped to signals' own rows by model_name (not node_id, which is what is under test): the
+    vocabulary pipeline's classify fallback logs classify runs in the same invocation. -#}
+{% set signals_model = 'ai_classify' if target.type != 'bigquery' else var('model_generate') %}
 with expected_events as (
     select 'started' as event
     union all
@@ -13,6 +16,7 @@ current_rows as (
     from {{ ref('ai_run_log') }}
     where invocation_id = '{{ invocation_id }}'
       and function_name = 'classify'
+      and model_name = '{{ signals_model }}'
 ),
 bad_rows as (
     select event, node_id, 'wrong_node_id' as issue

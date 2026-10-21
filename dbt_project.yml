@@ -37,6 +37,9 @@ vars:
   # Snowflake Decision is in private preview and unvalidated here; true opts an account with
   # preview access into decide() on Snowflake.
   decide_snowflake_preview: false
+  # Fixed-vocabulary pipeline on an engine where decide() is unavailable: 'error' stops with a
+  # message naming the fallback; 'classify' labels with classify() and marks rows 'unscored'.
+  decide_fallback: error
 
   # Embeddings — pinned. A corpus embedded by one model cannot be searched by another.
   embedding_model: null

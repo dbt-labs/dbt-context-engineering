@@ -38,7 +38,7 @@
     {%- set max_rows = var('max_batch_rows', 10000) -%}
     {%- set max_tokens = var('max_est_tokens', 5000000) -%}
     {%- set call = dbt_context_engineering.resolve_call_prompt(prompt, output_schema) -%}
-    {%- set tok_expr = dbt_context_engineering.estimate_call_tokens(input_column, call[0], call[1], output_tokens) -%}
+    {%- set tok_expr = dbt_context_engineering.estimate_call_tokens(input_column, call[0], call[1], output_tokens if output_tokens is not none else call[2]) -%}
 
     {%- set q -%}
         select

@@ -319,6 +319,42 @@ jobs:
           check bad_id "must be letters, digits and underscores"
           check extra_field "unsupported field(s) options"
           check noul_keys "may only hold 'true' and 'false'"
+      - name: vocabulary pipeline stops without a decision model and names the classify fallback
+        # The default decide_fallback is 'error'. The positive control sets it to 'classify' and
+        # requires classify's own "not implemented for duckdb" message instead, which is only
+        # reachable if the fallback was taken.
+        run: |
+          ci/expect_failure.sh "does not yet support decision models. Set var decide_fallback: classify" \
+            dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+              --select probe_vocabulary_fallback --vars '{gate_probe: vocabulary_fallback}'
+          ci/expect_failure.sh "classify is not implemented for the 'duckdb' adapter" \
+            dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+              --select probe_vocabulary_fallback --vars '{gate_probe: vocabulary_fallback, decide_fallback: classify, ai_functions_enabled: true}'
+      - name: vocabulary macros stop when no vocabulary is named
+        # Neither meta.ai_vocabulary nor name= / version= on the model.
+        run: |
+          ci/expect_failure.sh "no vocabulary named. Set config(meta={'ai_vocabulary'" \
+            dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+              --select probe_vocabulary_no_meta --vars '{gate_probe: vocabulary_no_meta}'
+      - name: vocabulary_labels stops on version skew with its decided relation
+        # The labels model reads call_topics v1; the stand-in decided relation holds v0 rows.
+        run: |
+          ci/expect_failure.sh "holds rows decided with call_topics@v0/decide, but this model reads call_topics@v1/decide" \
+            dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+              --select vocab_decided_skewed probe_vocabulary_skew --vars '{gate_probe: vocabulary_skew}'
+      - name: vocabulary rejects a malformed vocabulary at compile time
+        run: |
+          check() {
+            ci/expect_failure.sh "$2" \
+              dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+                --select probe_vocabulary_invalid --vars "{gate_probe: vocabulary_invalid, vocab_case: $1}"
+          }
+          check no_instructions "non-empty instructions and terms"
+          check bad_label "must be lowercase letters"
+          check duplicate "appears more than once"
+          check no_definition "needs a definition"
+          check bad_status "status must be active or deprecated"
+          check none_active "has no active terms"
 
       # ---- Coverage for package code that ships but no model calls --------------------------
       - name: no_oversized_chunks catches an oversized chunk

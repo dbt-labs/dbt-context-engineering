@@ -351,3 +351,29 @@ models:
               arguments:
                 to: ref('orphan_kb_valid_keys')
                 field: source_key
+
+  - name: dim_vocabulary
+    description: "vocabulary_rows over the call_topics v1 test vocabulary, every status."
+    columns:
+      - name: term_label
+        tests: [unique, not_null]
+      - name: status
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['active', 'deprecated']
+
+  - name: vocab_labels_decide
+    description: "vocabulary_labels on the decide path over seeded decisions and a review fixture."
+    columns:
+      - name: final_term
+        tests:
+          - relationships:
+              arguments:
+                to: ref('dim_vocabulary')
+                field: term_label
+      - name: final_status
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['accepted', 'needs_review', 'unscored', 'reviewed']

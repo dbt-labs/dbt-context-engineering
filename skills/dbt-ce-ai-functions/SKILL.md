@@ -1,6 +1,6 @@
 ---
 name: dbt-ce-ai-functions
-description: "Use the row-level AI functions from the dbt_context_engineering package in a consuming dbt project: generate (free-form/structured text), classify (single label from a taxonomy), extract (typed structured records), ai_agg (group-level LLM aggregation), and decide (decision models with confidence), plus authoring the versioned prompt and schema macros they require in your own project and reading structured output back with text() and field(). Use whenever a user wants an LLM to run over their rows in dbt: 'classify each ticket by priority', 'extract facts/fields from documents', 'summarize each call', 'tag rows with a category', 'pull structured JSON out of text', 'aggregate a group with an LLM', 'classify with a confidence score', 'write a prompt for classify', or 'version my prompts'. Trigger even when the user names only the task ('label these', 'summarize each') without naming a function. For embedding and semantic search see dbt-ce-pipeline; for install and model/cost vars see dbt-ce-setup."
+description: "Use the row-level AI functions from the dbt_context_engineering package in a consuming dbt project: generate (free-form/structured text), classify (single label from a taxonomy), extract (typed structured records), ai_agg (group-level LLM aggregation), and decide (decision models with confidence) plus the fixed-vocabulary pipeline, plus authoring the versioned prompt and schema macros they require in your own project and reading structured output back with text() and field(). Use whenever a user wants an LLM to run over their rows in dbt: 'classify each ticket by priority', 'extract facts/fields from documents', 'summarize each call', 'tag rows with a category', 'pull structured JSON out of text', 'aggregate a group with an LLM', 'classify with a confidence score', 'route uncertain labels to review', 'write a prompt for classify', or 'version my prompts'. Trigger even when the user names only the task ('label these', 'summarize each') without naming a function. For embedding and semantic search see dbt-ce-pipeline; for install and model/cost vars see dbt-ce-setup."
 ---
 
 # Row-level AI functions with dbt_context_engineering
@@ -88,6 +88,10 @@ select utterance_id,
 from {{ ref('stg_utterances') }}
 ```
 
+For labeling against a governed vocabulary, with confidence routing, a review loop and a
+`classify` fallback on engines without `decide`, use `vocabulary_decide` + `vocabulary_labels`
+(see `references/functions-reference.md` and ADR-0037).
+
 ## Authoring prompts & schemas (this lives in YOUR project)
 
 This is the part unique to being a consumer: **prompts and schemas are versioned Jinja macros
@@ -161,7 +165,7 @@ Wrapper outputs have per-engine shapes; two helpers normalize reading them:
 ## Reference files
 
 - `references/functions-reference.md` — exact signatures, required vs optional args, output
-  shapes, reading-back helpers, and per-engine notes for generate/classify/extract/ai_agg/decide.
+  shapes, reading-back helpers, and per-engine notes for generate/classify/extract/ai_agg/decide and the vocabulary pipeline.
 - `references/prompts-and-schemas.md` — authoring `prompt__`/`schema__` macros, the
   `{{ input }}` placeholder, enum-as-single-source-of-truth, versioning discipline, and why
   they live in the consuming project.

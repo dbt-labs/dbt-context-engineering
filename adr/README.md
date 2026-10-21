@@ -46,6 +46,7 @@ just record the choice.
 | [0032](0032-dbt-version-floor-and-fusion-support.md) | Raising the dbt version floor and declaring Fusion support | Accepted |
 | [0035](0035-per-call-token-estimate-for-the-guard-and-the-log.md) | Estimate the whole AI call per row, with the prompt named once in model meta | Accepted |
 | [0036](0036-decide-a-decision-model-operation.md) | Add `decide`: a sixth operation for decision models | Accepted |
+| [0037](0037-fixed-vocabulary-classification-with-confidence-routing.md) | Fixed-vocabulary classification with confidence routing and reviewer precedence | Accepted |
 
 ## New here? A reading path
 
@@ -71,6 +72,7 @@ of the discipline.
    - [0006](0006-knowledge-base-union-to-common-shape.md) — unifying many sources into one knowledge base
    - [0014](0014-generic-metadata-explicit-provenance.md) — how provenance is promoted in the knowledge base
    - [0027](0027-classification-as-a-second-privileged-knowledge-base-column.md), asking 0014's promote-or-stay-generic question for a third kind of field (the derived label), the first time it's answered "promote" since citation_url
+   - [0037](0037-fixed-vocabulary-classification-with-confidence-routing.md), labeling against a versioned vocabulary, accepting confident answers, routing the rest to people, and letting their decisions stand
 4. **Making it affordable, correct, and trustworthy** — the governance that makes it production-grade.
    - [0003](0003-cost-as-a-first-class-output.md) — cost (the token economy, guard + log)
    - [0035](0035-per-call-token-estimate-for-the-guard-and-the-log.md), sizing the whole AI call per row, prompt and output included, not only 0003's input text

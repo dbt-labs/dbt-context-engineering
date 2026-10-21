@@ -121,7 +121,7 @@
     {#- Size the batch with a SINGLE scan of the relation (derived table _sz), then reference its
         columns below — count and token-sum are computed once, not once per output column. -#}
     {%- if input_column is not none -%}
-        {%- set sz_select = "count(*) as _n, coalesce(sum(" ~ dbt_context_engineering.estimate_call_tokens(input_column, call[0], call[1], output_tokens) ~ "), 0) as _toks" -%}
+        {%- set sz_select = "count(*) as _n, coalesce(sum(" ~ dbt_context_engineering.estimate_call_tokens(input_column, call[0], call[1], output_tokens if output_tokens is not none else call[2]) ~ "), 0) as _toks" -%}
         {%- set tokens_expr = "cast(_sz._toks as " ~ num_t ~ ")" -%}
         {%- set cost_expr = ("cast(_sz._toks / 1000.0 * " ~ price ~ " as " ~ num_t ~ ")") if price is not none else ("cast(null as " ~ num_t ~ ")") -%}
     {%- else -%}

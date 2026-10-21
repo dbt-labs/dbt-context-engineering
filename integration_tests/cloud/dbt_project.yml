@@ -38,6 +38,9 @@ vars:
   # stop the run. On duckdb the comparison is a fixed stand-in against itself (always 1.0),
   # so raising it there would be meaningless.
   embedding_canary_test_severity: error
+  # decide() has no engine path on Snowflake (preview, opt-in) or BigQuery, so the fixed-vocabulary
+  # pipeline labels with classify() there. Databricks runs decide() and never reads this.
+  decide_fallback: classify
 
 models:
   dbt_context_engineering:

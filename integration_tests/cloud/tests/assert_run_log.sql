@@ -7,9 +7,13 @@
 -- post-hook side effect is invisible to the DAG, so depend on the logging model to run after it:
 -- depends_on: {{ ref('signals') }}
 {% set price = var('cost_per_1k_tokens', none) %}
+{#- Scoped to signals' own rows by model_name, the same expression signals.sql logs: the
+    vocabulary pipeline's classify fallback logs classify runs in the same invocation. -#}
+{% set signals_model = 'ai_classify' if target.type != 'bigquery' else var('model_generate') %}
 with log as (
     select * from {{ ref('ai_run_log') }}
     where invocation_id = '{{ invocation_id }}' and function_name = 'classify'
+      and model_name = '{{ signals_model }}'
 ),
 started as (
     select * from log where event = 'started'

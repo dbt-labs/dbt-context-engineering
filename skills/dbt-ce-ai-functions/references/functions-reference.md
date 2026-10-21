@@ -134,6 +134,57 @@ decide_answer(decision, question, field, as_type=none)   decide_error(decision) 
 - Define the questions in a macro in your project and call it from the body and both hooks, so all
   three share one definition. Inline questions in the body cannot be reached from a hook.
 
+## Fixed-vocabulary pipeline
+
+A vocabulary version is a macro in your project:
+
+```sql
+{% macro vocabulary__ticket_topics__v1() -%}
+    {{ return({'instructions': 'What is this ticket mainly about?',
+               'terms': [{'label': 'billing', 'definition': 'Payments, invoices, refunds.',
+                          'scope_note': 'Not pricing questions before purchase.'},
+                         {'label': 'outage', 'definition': 'The product is down or erroring.'},
+                         {'label': 'other', 'definition': 'Anything else.'}]}) }}
+{%- endmacro %}
+```
+
+Two models, plus your own review table (`<id>`, `approved_term`, `reviewer`, `reviewed_at`). Each
+model names the vocabulary once in `meta.ai_vocabulary`; the macros and both hooks read it, so the
+hooks need no prompt arguments:
+
+```sql
+-- ticket_topics_decided.sql; input relation carries ticket_id, body, and content_hash (content_hash('body'))
+{{ config(
+    materialized='incremental', unique_key='ticket_id', full_refresh=var('allow_full_redecide', false),
+    meta={'ai_vocabulary': {'name': 'ticket_topics', 'version': 'v1'}},
+    pre_hook=[
+        "{{ dbt_context_engineering.guard_batch(ref('stg_tickets'), 'body', filter=ticket_topics_delta()) }}",
+        "{{ dbt_context_engineering.log_ai_run(dbt_context_engineering.vocabulary_method(),
+             relation=ref('stg_tickets'), input_column='body', filter=ticket_topics_delta()) }}"],
+    post_hook="{{ dbt_context_engineering.complete_ai_run(dbt_context_engineering.vocabulary_method()) }}"
+) }}
+{{ dbt_context_engineering.vocabulary_decide(ref('stg_tickets'), 'ticket_id', 'body', filter=ticket_topics_delta()) }}
+
+-- ticket_topics.sql: table, same meta.ai_vocabulary
+{{ dbt_context_engineering.vocabulary_labels(ref('ticket_topics_decided'), 'ticket_id',
+    threshold=0.8, review_relation=ref('ticket_topic_reviews')) }}
+```
+
+where `ticket_topics_delta()` is a project macro returning
+`vocabulary_delta_predicate('ticket_id', review_relation=ref('ticket_topic_reviews'))`. A model
+with neither `meta.ai_vocabulary` nor `name=` / `version=` fails at compile time.
+
+- `status`: `accepted` (confidence at or above `threshold`), `needs_review`, or `unscored`
+  (`classify` fallback). `final_term` is the reviewed term, else the term for `accepted` /
+  `unscored` rows; map it to `knowledge_base`'s `classification`.
+- On an engine without `decide`, set `decide_fallback: classify`; the default `error` stops with
+  that instruction.
+- Choose `threshold` with `eval(relation, pred, expected, confidence_column='confidence')` on a
+  golden set: it adds accuracy and count per confidence bucket.
+- `vocabulary_rows()` builds a `dim_vocabulary` model of every term (set the same meta entry).
+- Bump both models' `meta.ai_vocabulary` together and rebuild the decided model: `vocabulary_labels`
+  stops the build if the decided rows came from a different vocabulary version or method.
+
 ## Reading structured output
 
 | helper | returns |

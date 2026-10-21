@@ -257,3 +257,21 @@ models:
               arguments:
                 to: ref('orphan_kb_valid_keys')
                 field: source_key
+
+  - name: dim_vocabulary
+    description: "vocabulary_rows over the call_topics v1 test vocabulary, every status."
+    columns:
+      - name: term_label
+        tests: [unique, not_null]
+
+  - name: vocab_labels
+    description: "The live fixed-vocabulary pipeline's labels: decide on Databricks, classify fallback elsewhere."
+    columns:
+      - name: utterance_id
+        tests: [unique, not_null]
+      - name: final_term
+        tests:
+          - relationships:
+              arguments:
+                to: ref('dim_vocabulary')
+                field: term_label

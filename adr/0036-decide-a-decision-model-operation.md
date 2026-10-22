@@ -85,7 +85,13 @@ decision models, that returns the engine's raw result, read through `decide_answ
   execute time: a non-dict or empty set; an id that is not an identifier; a field other than
   `type`, `instructions` and `criteria`; a type other than `noul`, `choice`, `score`; empty
   instructions; a choice without a label-to-description mapping or over the engine's cap; a score
-  without 2 to 10 levels; noul criteria with keys other than `true` and `false`.
+  without 2 to 10 levels; noul criteria with keys other than `true` and `false`; a choice label or
+  description, score level or noul description that is not a non-empty string; a repeated score
+  level.
+- `decide_questions_json(questions)` serializes the questions as JSON text in declared order:
+  question ids as given, each question's fields as `type`, `instructions`, `criteria`, and choice
+  labels as given. Scalars and lists go through `tojson`. Both engine paths send it, and hooks size
+  `decide` with `log_ai_run('decide', ..., prompt=decide_questions_json(questions))`.
 - The choice cap is `var('decide_choice_cap_databricks', 255)` and
   `var('decide_choice_cap_snowflake', 32)`, the engines' documented limits, raisable if an engine
   raises its own. No lower soft threshold is applied.
@@ -96,10 +102,11 @@ decision models, that returns the engine's raw result, read through `decide_answ
   model this package can call; use `classify()`, which labels from the same fixed set without a
   confidence. On Snowflake the message adds that an account with preview access can opt in with
   `decide_snowflake_preview: true`.
-- `databricks__decide` is `ai_decide(<state>, '<questions as JSON>')`.
+- `databricks__decide` is `ai_decide(<state>, '<decide_questions_json>')`.
 - `snowflake__decide` is `parse_json(to_varchar(ai_complete(model => 'snowflake-decision',
-  prompt => to_json(object_construct('state', <state>, 'questions', parse_json('<json>'))))))`,
-  marked LIVE-VALIDATION DEFERRED in the macro.
+  prompt => '{"state": ' || to_json(to_variant(<state>)) || ', "questions": ' ||
+  '<decide_questions_json>' || '}')))`, assembled as text because a Snowflake OBJECT does not keep
+  key order, and marked LIVE-VALIDATION DEFERRED in the macro.
 - `decide_answer(decision, question, field, as_type)` reads `choice`, `confidence`,
   `probabilities`, `probabilities.<label>`, `score`, `legend` and `probability`, cast to `as_type`.
   The Databricks branch reads `response.answers.<question>.<field>`; the Snowflake branch reads
@@ -109,7 +116,7 @@ decision models, that returns the engine's raw result, read through `decide_answ
   a query error, so its branch returns null.
 - `decide_model(decision)` returns `ai_decide/<metadata.version>` on Databricks and
   `snowflake-decision` on Snowflake.
-- `log_ai_run('decide', ..., prompt=tojson(questions))` counts the questions JSON on every row and
+- `log_ai_run('decide', ..., prompt=decide_questions_json(questions))` counts the questions JSON on every row and
   defaults the output allowance to 0, because a decision model returns typed answers, not
   generated text. With no published billing unit, `decide`'s `est_tokens` and `est_cost` measure
   request size under the project's per-token price, not a bill, and this record makes no cost
@@ -165,8 +172,26 @@ hooks one definition with no literal to drift, so the meta entry would add the r
 removing any repetition. The governed path for a fixed label set, the vocabulary pipeline, already
 names its questions once through `meta.ai_vocabulary` (ADR-0037).
 
-**Why not Jevflake or TypeSafe's API.** Both send row content out of the warehouse, which
-[ADR-0012](0012-ai-as-a-row-level-sql-function.md) rules out.
+**Why serialize the questions by hand.** `tojson` behaves differently on the two engines this
+package supports. The same call, `tojson({"topic": {"type": "choice", "instructions": "x",
+"criteria": {"zebra": "z", "apple": "a"}}, "alpha": {"type": "noul", "instructions": "y"}})`,
+rendered on dbt Core 1.12 and dbt Fusion 2.0.9:
+
+```
+Core:   {"topic": {"type": "choice", "instructions": "x", "criteria": {"zebra": "z", "apple": "a"}}, "alpha": {"type": "noul", "instructions": "y"}}
+Fusion: {"alpha": {"instructions": "y", "type": "noul"}, "topic": {"criteria": {"apple": "a", "zebra": "z"}, "instructions": "x", "type": "choice"}}
+```
+
+Fusion sorts keys at every level, so `tojson(questions)` would send choice labels in declared
+order from one engine and alphabetical order from the other, for the same model and data. Both
+engines iterate a dict in insertion order, so a serializer that walks the dict and encodes only
+scalars with `tojson` produces the same text on both. Its token length equals `tojson`'s, since the
+two differ only in order.
+
+**Why not Jevflake or TypeSafe's API.** Both send row content out of the warehouse to TypeSafe.
+[ADR-0012](0012-ai-as-a-row-level-sql-function.md) keeps inference in the warehouse's native AI
+functions, so the data stays inside the warehouse boundary, and `decide` calls only those
+functions.
 
 ## Consequences
 
@@ -177,6 +202,8 @@ names its questions once through `meta.ai_vocabulary` (ADR-0037).
 - **The run log cannot record a versioned model id** for `decide`. On Databricks it records the
   function version; the model behind it can change without the log showing it.
 - **A malformed question set fails at compile time,** before any call is billed.
+- **dbt Core and Fusion send the same request** for the same questions; `assert_decide_questions_json`
+  checks the exact serialized text on both engines.
 - **CI and the integration tiers cover every branch.** duckdb reads seeded results for every
   question type and the error row, and asserts the unsupported-engine message and each validation
   message. The cloud tier runs a live choice, noul and score battery on Databricks, gated on

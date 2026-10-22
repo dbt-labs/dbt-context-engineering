@@ -14,6 +14,9 @@
     'bad_id':       {'1q': {'type': 'noul', 'instructions': 'x'}},
     'extra_field':  {'q': {'type': 'noul', 'instructions': 'x', 'options': {}}},
     'noul_keys':    {'q': {'type': 'noul', 'instructions': 'x', 'criteria': {'maybe': 'y'}}},
+    'score_repeat': {'q': {'type': 'score', 'instructions': 'x', 'criteria': ['low', 'low']}},
+    'choice_blank': {'q': {'type': 'choice', 'instructions': 'x', 'criteria': {'a': ' '}}},
+    'noul_blank':   {'q': {'type': 'noul', 'instructions': 'x', 'criteria': {'true': ''}}},
 } -%}
 {%- do dbt_context_engineering.validate_decide_questions(cases[var('decide_case', 'bad_type')], 2) -%}
 select 1 as id

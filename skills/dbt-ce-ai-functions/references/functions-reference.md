@@ -128,7 +128,7 @@ decide_answer(decision, question, field, as_type=none)   decide_error(decision) 
 - `decide_error` is Databricks' per-row `error_message` (Snowflake fails the query instead).
   `decide_model` is `ai_decide/<function version>` on Databricks; neither engine exposes a
   versioned model id.
-- Cost: `log_ai_run('decide', ..., prompt=tojson(questions))` counts the questions on every row
+- Cost: `log_ai_run('decide', ..., prompt=decide_questions_json(questions))` counts the questions on every row
   with no output allowance, since a decision model returns typed answers rather than generated
   text. Neither engine publishes how `decide` is billed, so treat its `est_tokens` as request size.
 - Define the questions in a macro in your project and call it from the body and both hooks, so all

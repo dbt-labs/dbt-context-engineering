@@ -77,7 +77,7 @@ probability per label and a confidence), `noul` (probability a statement is true
 read fields in another with `decide_answer(col, question, field, as_type)`, so the model is called
 once per row. Runs on Databricks (`ai_decide`). On Snowflake it is off unless the account has
 Snowflake Decision preview access and sets `decide_snowflake_preview: true`. On BigQuery it raises
-and points to `classify`. Log it with `log_ai_run('decide', ..., prompt=tojson(questions))`.
+and points to `classify`. Log it with `log_ai_run('decide', ..., prompt=decide_questions_json(questions))`.
 
 ```sql
 select utterance_id,

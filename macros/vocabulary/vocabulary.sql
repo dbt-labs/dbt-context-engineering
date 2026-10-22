@@ -191,7 +191,7 @@
     output_schema=, so the cost estimate counts them (ADR-0035). -#}
 {% macro vocabulary_sent_prompt(name=none, version=none) -%}
     {%- if dbt_context_engineering.vocabulary_method() == 'decide' -%}
-        {{ return(tojson(dbt_context_engineering.vocabulary_question(name, version))) }}
+        {{ return(dbt_context_engineering.decide_questions_json(dbt_context_engineering.vocabulary_question(name, version))) }}
     {%- endif -%}
     {{ return(dbt_context_engineering.vocabulary_prompt(name, version)) }}
 {%- endmacro %}

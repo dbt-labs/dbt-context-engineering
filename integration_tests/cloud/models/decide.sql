@@ -1,9 +1,9 @@
 {{ config(
     materialized='table',
     enabled=dbt_context_engineering.decide_available(),
-    pre_hook="{{ dbt_context_engineering.guard_batch(ref('fixture_utterances'), 'utterance_text', prompt=tojson(decide_test_questions()), output_tokens=0) }}",
+    pre_hook="{{ dbt_context_engineering.guard_batch(ref('fixture_utterances'), 'utterance_text', prompt=dbt_context_engineering.decide_questions_json(decide_test_questions()), output_tokens=0) }}",
     post_hook=[
-        "{{ dbt_context_engineering.log_ai_run('decide', model_name='ai_decide', relation=ref('fixture_utterances'), input_column='utterance_text', prompt=tojson(decide_test_questions())) }}",
+        "{{ dbt_context_engineering.log_ai_run('decide', model_name='ai_decide', relation=ref('fixture_utterances'), input_column='utterance_text', prompt=dbt_context_engineering.decide_questions_json(decide_test_questions())) }}",
         "{{ dbt_context_engineering.complete_ai_run('decide', model_name='ai_decide') }}"
     ]
 ) }}

@@ -15,7 +15,8 @@
   score), `instructions`, and `criteria`: a label -> description mapping for choice (1 to the
   engine's cap), an ordered list of 2-10 levels for score, an optional {true, false} mapping for
   noul. Validated at compile time by validate_decide_questions. Define them in a project macro and
-  call it from the body and the guard_batch / log_ai_run hooks, so all three share one definition.
+  call it from the body and the guard_batch / log_ai_run hooks, so all three share one definition;
+  size them in the hooks with prompt=decide_questions_json(questions).
 
   OUTPUT CONTRACT: decide returns the engine's raw result, one value per row. Read it with
   decide_answer / decide_error, which normalize the per-engine shape at read time. Normalizing
@@ -116,6 +117,11 @@
             {%- if c is not mapping or (c | length) == 0 -%}
                 {%- do exceptions.raise_compiler_error("decide: choice question '" ~ qid ~ "' needs criteria as a non-empty label -> description dict.") -%}
             {%- endif -%}
+            {%- for label, desc in c.items() -%}
+                {%- if label is not string or (label | trim) == '' or desc is not string or (desc | trim) == '' -%}
+                    {%- do exceptions.raise_compiler_error("decide: choice question '" ~ qid ~ "' needs every label and description to be a non-empty string.") -%}
+                {%- endif -%}
+            {%- endfor -%}
             {%- if cap is not none and (c | length) > cap -%}
                 {%- do exceptions.raise_compiler_error("decide: choice question '" ~ qid ~ "' has " ~ (c | length) ~ " labels; " ~ target.type ~ " accepts at most " ~ cap ~ " (var decide_choice_cap_" ~ target.type ~ "). Split it into a hierarchical vocabulary.") -%}
             {%- endif -%}
@@ -123,12 +129,53 @@
             {%- if c is mapping or c is string or c is not iterable or (c | length) < 2 or (c | length) > 10 -%}
                 {%- do exceptions.raise_compiler_error("decide: score question '" ~ qid ~ "' needs criteria as a list of 2 to 10 levels, lowest first.") -%}
             {%- endif -%}
+            {%- set ns = namespace(seen=[]) -%}
+            {%- for level in c -%}
+                {%- if level is not string or (level | trim) == '' -%}
+                    {%- do exceptions.raise_compiler_error("decide: score question '" ~ qid ~ "' needs every level to be a non-empty string.") -%}
+                {%- endif -%}
+                {%- if level in ns.seen -%}
+                    {%- do exceptions.raise_compiler_error("decide: score question '" ~ qid ~ "' repeats the level '" ~ level ~ "'.") -%}
+                {%- endif -%}
+                {%- set ns.seen = ns.seen + [level] -%}
+            {%- endfor -%}
         {%- elif c is not none -%}
             {%- if c is not mapping or (c.keys() | reject('in', ['true', 'false']) | list) -%}
                 {%- do exceptions.raise_compiler_error("decide: noul question '" ~ qid ~ "' criteria may only hold 'true' and 'false' descriptions.") -%}
             {%- endif -%}
+            {%- for desc in c.values() -%}
+                {%- if desc is not string or (desc | trim) == '' -%}
+                    {%- do exceptions.raise_compiler_error("decide: noul question '" ~ qid ~ "' needs its true / false descriptions to be non-empty strings.") -%}
+                {%- endif -%}
+            {%- endfor -%}
         {%- endif -%}
     {%- endfor -%}
+{%- endmacro %}
+
+
+{#-
+  decide_questions_json(questions) -> the questions as JSON text, in declared order: question ids
+  as given, each question's fields as type, instructions, criteria, and choice labels as given.
+  Built by hand because dbt Fusion's tojson sorts dict keys at every level while dbt Core keeps
+  insertion order, so tojson(questions) sends a different request on each engine. Scalars and
+  lists go through tojson, whose escaping and separators both engines share. Use it wherever the
+  questions are sent or sized: decide() itself, and log_ai_run(..., prompt=) for decide.
+-#}
+{% macro decide_questions_json(questions) -%}
+    {%- set ns = namespace(entries=[]) -%}
+    {%- for qid, q in questions.items() -%}
+        {%- set parts = ['"type": ' ~ tojson(q['type']), '"instructions": ' ~ tojson(q['instructions'])] -%}
+        {%- set c = q.get('criteria') -%}
+        {%- if c is mapping -%}
+            {%- set kv = [] -%}
+            {%- for k, v in c.items() -%}{%- do kv.append(tojson(k | string) ~ ': ' ~ tojson(v)) -%}{%- endfor -%}
+            {%- do parts.append('"criteria": {' ~ (kv | join(', ')) ~ '}') -%}
+        {%- elif c is not none -%}
+            {%- do parts.append('"criteria": ' ~ tojson(c | list)) -%}
+        {%- endif -%}
+        {%- set ns.entries = ns.entries + [tojson(qid | string) ~ ': {' ~ (parts | join(', ')) ~ '}'] -%}
+    {%- endfor -%}
+    {{ return('{' ~ (ns.entries | join(', ')) ~ '}') }}
 {%- endmacro %}
 
 
@@ -145,21 +192,22 @@
 {% macro databricks__decide(state_column, questions) -%}
     {{ dbt_context_engineering.require_databricks_ai_runtime() }}
     {#- ai_decide requires questions as a constant STRING, the same definitions for every row. -#}
-    ai_decide({{ state_column }}, {{ dbt_context_engineering.str_literal(tojson(questions)) }})
+    ai_decide({{ state_column }}, {{ dbt_context_engineering.str_literal(dbt_context_engineering.decide_questions_json(questions)) }})
 {%- endmacro %}
 
 
 {#- Snowflake Decision through AI_COMPLETE, per Snowflake's announcement: the request is JSON with
     `state` and `questions`. LIVE-VALIDATION DEFERRED: our only call (2026-10-20) failed before
-    reaching the model, "The model you requested is unavailable in your region". to_varchar makes
-    the parse indifferent to whether AI_COMPLETE hands back text or an OBJECT for this model. -#}
+    reaching the model, "The model you requested is unavailable in your region". The request is
+    assembled as text rather than with object_construct / parse_json, because a Snowflake OBJECT
+    does not keep key order and the questions must go out in declared order (decide_questions_json);
+    only the row's state is JSON-encoded by Snowflake. to_varchar makes the parse indifferent to
+    whether AI_COMPLETE hands back text or an OBJECT for this model. -#}
 {% macro snowflake__decide(state_column, questions) -%}
     parse_json(to_varchar(ai_complete(
         model => 'snowflake-decision',
-        prompt => to_json(object_construct(
-            'state', {{ state_column }},
-            'questions', parse_json({{ dbt_context_engineering.str_literal(tojson(questions)) }})
-        ))
+        prompt => '{"state": ' || to_json(to_variant({{ state_column }})) || ', "questions": '
+            || {{ dbt_context_engineering.str_literal(dbt_context_engineering.decide_questions_json(questions)) }} || '}'
     )))
 {%- endmacro %}
 

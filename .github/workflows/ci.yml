@@ -319,6 +319,9 @@ jobs:
           check bad_id "must be letters, digits and underscores"
           check extra_field "unsupported field(s) options"
           check noul_keys "may only hold 'true' and 'false'"
+          check score_repeat "repeats the level 'low'"
+          check choice_blank "every label and description to be a non-empty string"
+          check noul_blank "true / false descriptions to be non-empty strings"
       - name: vocabulary pipeline stops without a decision model and names the classify fallback
         # The default decide_fallback is 'error'. The positive control sets it to 'classify' and
         # requires classify's own "not implemented for duckdb" message instead, which is only

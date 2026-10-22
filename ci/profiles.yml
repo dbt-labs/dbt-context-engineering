@@ -34,3 +34,12 @@ dbt_context_engineering:
       dataset: ci
       keyfile: /dev/null
       threads: 1
+    redshift:
+      type: redshift
+      host: placeholder
+      user: placeholder
+      password: placeholder
+      dbname: placeholder
+      port: 5439
+      schema: ci
+      threads: 1

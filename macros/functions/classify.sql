@@ -60,9 +60,25 @@
     {%- if execute -%}
         {{ exceptions.raise_compiler_error(
             "classify is not implemented for the '" ~ target.type ~ "' adapter. "
-            ~ "Supported: snowflake, databricks, bigquery.") }}
+            ~ "Supported: snowflake, databricks, bigquery, redshift.") }}
     {%- endif -%}
     {{ return('null') }}
+{%- endmacro %}
+
+
+{% macro redshift__classify(input_column, prompt, output_schema, model) -%}
+    {{ dbt_context_engineering.require_redshift_bedrock() }}
+    {#- No dedicated classify and no response_format on Redshift (Bedrock returns plain text). Route
+        through the text inference UDF: augment_prompt lists the allowed enum values, and
+        redshift_output_instruction(mode='label') pins the reply to one bare label — then trim() to
+        the scalar label (same output contract as the other engines: a plain STRING). Best-effort,
+        prompt-enforced. `prompt` is REQUIRED (render_prompt raises if none), as on every engine. -#}
+    {%- set fn = model or var('model_classify', var('model_generate', none)) -%}
+    {%- if fn is none -%}{%- if execute -%}{{ exceptions.raise_compiler_error("classify: set var model_classify or model_generate to the Bedrock inference FUNCTION name (Redshift routes classify through the text UDF).") }}{%- else -%}{%- set fn = 'unset' -%}{%- endif -%}{%- endif -%}
+    {%- set _p = dbt_context_engineering.augment_prompt(prompt, output_schema) ~ dbt_context_engineering.redshift_output_instruction(output_schema, 'label') -%}
+    cast(trim({{ fn }}(
+        {{ dbt_context_engineering.render_prompt(_p, input_column) }}
+    )) as {{ dbt.type_string() }})
 {%- endmacro %}
 
 

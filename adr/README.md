@@ -44,6 +44,7 @@ just record the choice.
 | [0027](0027-classification-as-a-second-privileged-knowledge-base-column.md) | Classification as a second privileged knowledge_base column | Accepted |
 | [0028](0028-add-ai-agg-group-level-aggregation.md) | Add `ai_agg`: a fifth operation for group-level LLM aggregation | Accepted |
 | [0032](0032-dbt-version-floor-and-fusion-support.md) | Raising the dbt version floor and declaring Fusion support | Accepted |
+| [0033](0033-redshift-support-bedrock-external-models.md) | Redshift support: Bedrock inference UDFs, best-effort structured output, pure-SQL cosine | Accepted |
 
 ## New here? A reading path
 

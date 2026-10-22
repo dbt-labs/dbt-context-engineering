@@ -33,3 +33,9 @@
 {% macro bigquery__embedding_dimension(vector_expression) -%}
     array_length({{ vector_expression }})
 {%- endmacro %}
+
+{#- Redshift: embeddings are SUPER arrays (embed() returns the .embedding SUPER), and GET_ARRAY_LENGTH
+    is the native SUPER array-length function — no JSON_SERIALIZE round-trip needed. -#}
+{% macro redshift__embedding_dimension(vector_expression) -%}
+    get_array_length({{ vector_expression }})
+{%- endmacro %}

@@ -1,0 +1,37 @@
+version: 2
+
+models:
+  - name: rs_embeddings
+    description: "embed() over the seed; stores the SUPER vector, observed dim, and content_hash."
+    columns:
+      - name: id
+        tests: [unique, not_null]
+      - name: dim
+        tests: [not_null]
+
+  - name: rs_chunks
+    description: "chunk() over rs_sentences (incremental delete+insert). source_rows is a SUPER array."
+    columns:
+      - name: chunk_id
+        tests: [unique, not_null]
+      - name: chunk_text
+        tests: [not_null]
+
+  - name: rs_classify
+    description: "classify() best-effort label; must land on the schema enum."
+    columns:
+      - name: id
+        tests: [unique, not_null]
+
+  - name: rs_extract
+    description: "extract() + field(); topic is required in the schema so it must be non-null."
+    columns:
+      - name: id
+        tests: [unique, not_null]
+      - name: topic
+        tests: [not_null]
+
+  - name: rs_generate
+    columns:
+      - name: id
+        tests: [unique, not_null]

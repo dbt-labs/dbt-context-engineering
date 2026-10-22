@@ -61,3 +61,12 @@ create or replace vector index {{ name }}
         ~ "API/SDK (Delta Sync or Direct Vector index), not SQL DDL. Create the endpoint + index "
         ~ "there, then query with vector_search. See ADR-0005.") }}
 {%- endmacro %}
+
+
+{% macro redshift__create_vector_index(name, relation, column, attributes, warehouse, target_lag, embedding_model, distance_type, index_type, storing) -%}
+    {{ exceptions.raise_compiler_error(
+        "create_vector_index: Redshift has no in-database vector index — its scale path for vector "
+        ~ "search is an external service (Amazon S3 Vectors or Amazon OpenSearch), provisioned and "
+        ~ "queried outside dbt, not SQL DDL. The package's brute-force vector_search (pure-SQL cosine "
+        ~ "over the SUPER embedding column) is the supported in-warehouse path on Redshift. See ADR-0005.") }}
+{%- endmacro %}

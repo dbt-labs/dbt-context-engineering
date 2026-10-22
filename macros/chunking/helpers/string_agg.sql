@@ -31,3 +31,11 @@
 {% macro databricks__string_agg(expr, sep, order_expr) -%}
     array_join(transform(array_sort(collect_list(struct({{ order_expr }} as _o, {{ expr }} as _v))), x -> x._v), '{{ sep }}')
 {%- endmacro %}
+
+{#- Redshift: LISTAGG with an inline WITHIN GROUP (ORDER BY ...), same shape as Snowflake. Redshift
+    (like Postgres) accepts a raw newline inside the delimiter literal, so sep is embedded directly.
+    ⚠️ LISTAGG has a 64KB per-group result limit and errors past it — for chunk_text over very large
+    partitions, keep chunk sizes bounded (the token cap already does). -#}
+{% macro redshift__string_agg(expr, sep, order_expr) -%}
+    listagg({{ expr }}, '{{ sep }}') within group (order by {{ order_expr }})
+{%- endmacro %}

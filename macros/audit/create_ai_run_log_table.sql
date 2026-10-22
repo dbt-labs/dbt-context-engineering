@@ -47,9 +47,22 @@
 -#}
 {% macro create_ai_run_log_table() -%}
     {%- if var('ai_functions_enabled', false) and execute -%}
-        {%- do run_query(
-            "create table if not exists " ~ ref('ai_run_log') ~ " as (" ~ dbt_context_engineering.ai_run_log_columns_sql() ~ ")"
-        ) -%}
+        {%- set _rel = ref('ai_run_log') -%}
+        {%- if target.type == 'redshift' -%}
+            {#- Redshift rejects CREATE TABLE IF NOT EXISTS ... AS (CTAS does not accept IF NOT
+                EXISTS), so check existence first, then plain CTAS. Race-free for the same reason
+                the shared path is: on-run-start runs once, serially, before any node starts, so
+                there is no concurrent writer to collide with. -#}
+            {%- if adapter.get_relation(_rel.database, _rel.schema, _rel.identifier) is none -%}
+                {%- do run_query(
+                    "create table " ~ _rel ~ " as (" ~ dbt_context_engineering.ai_run_log_columns_sql() ~ ")"
+                ) -%}
+            {%- endif -%}
+        {%- else -%}
+            {%- do run_query(
+                "create table if not exists " ~ _rel ~ " as (" ~ dbt_context_engineering.ai_run_log_columns_sql() ~ ")"
+            ) -%}
+        {%- endif -%}
     {%- endif -%}
     {#- The CREATE above runs via run_query(), a separate statement, not this return value.
         This macro is meant to be used standalone as an entire on-run-start hook, unlike the

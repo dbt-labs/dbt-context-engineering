@@ -26,6 +26,19 @@
 {%- endmacro %}
 
 
+{% macro require_redshift_bedrock() -%}
+    {#- ADVISORY, does not raise. Redshift has no built-in inline AI function: generate/classify/
+        extract/embed/ai_agg each call an inference UDF that must already exist, created once via
+        CREATE EXTERNAL MODEL over Amazon Bedrock (see create_bedrock_function, run-operation only).
+        On Redshift the model vars name that UDF, not a model string (var model_generate: ce_text,
+        var embedding_model: ce_embed). A missing/misnamed function surfaces as a clear "function
+        does not exist" error at run time; a live check (query the catalog for the function + its
+        external model, and verify the IAM/Bedrock wiring) lands when live creds exist to verify it
+        against. For now this documents the requirement and is a no-op so compile/parse passes — the
+        same Phase-0 stance require_databricks_serverless() and require_bq_model() take. -#}
+{%- endmacro %}
+
+
 {% macro require_ai_functions_enabled(fn_name) -%}
     {#- Off by default (var('ai_functions_enabled', false) in dbt_project.yml) so a fresh/CI
         target can never accidentally trigger a real, billed AI call just by running `dbt

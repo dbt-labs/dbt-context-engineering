@@ -34,6 +34,12 @@
     {%- if limit is none -%}
         {{ return('') }}
     {%- endif -%}
+    {#- Redshift has no QUALIFY, but `order by random() limit n` is an equally valid TRAILING clause
+        that caps the model to a bounded random sample — same contract, same positional caveat as the
+        qualify form (the model must not also carry its own ORDER BY/LIMIT here). -#}
+    {%- if target.type == 'redshift' -%}
+        {{ return('order by random() limit ' ~ limit) }}
+    {%- endif -%}
     {%- set random_fn = 'rand()' if target.type == 'bigquery' else 'random()' -%}
 qualify row_number() over (order by {{ random_fn }}) <= {{ limit }}
 {%- endmacro %}

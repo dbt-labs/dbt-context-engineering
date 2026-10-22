@@ -27,9 +27,36 @@
     {%- if execute -%}
         {{ exceptions.raise_compiler_error(
             "generate is not implemented for the '" ~ target.type ~ "' adapter. "
-            ~ "Supported: snowflake, databricks, bigquery.") }}
+            ~ "Supported: snowflake, databricks, bigquery, redshift.") }}
     {%- endif -%}
     {{ return('null') }}
+{%- endmacro %}
+
+
+{% macro redshift__generate(input_column, prompt, output_schema, model) -%}
+    {{ dbt_context_engineering.require_redshift_bedrock() }}
+    {#- On Redshift, `model` / var model_generate is the Bedrock inference FUNCTION name (minted by
+        create_bedrock_function), NOT a model string — the model id lives inside the external model
+        object the UDF wraps. -#}
+    {%- set fn = model or var('model_generate', none) -%}
+    {#- execute-gated, same reasoning as snowflake__generate: an unguarded raise here breaks parsing
+        of the whole project the moment any model anywhere calls generate() without the var set. -#}
+    {%- if fn is none -%}{%- if execute -%}{{ exceptions.raise_compiler_error("generate: set var model_generate to the Bedrock inference FUNCTION name created by create_bedrock_function (Redshift has no built-in inline AI function).") }}{%- else -%}{%- set fn = 'unset' -%}{%- endif -%}{%- endif -%}
+    {#- No response_format on Redshift (Bedrock returns plain text). For a structured call, constrain
+        the enum values (augment_prompt, shared with BigQuery) AND instruct the JSON shape
+        (redshift_output_instruction) — best-effort, prompt-enforced; read back with field(). -#}
+    {%- set _p = dbt_context_engineering.augment_prompt(prompt, output_schema) -%}
+    {%- if output_schema is not none -%}{%- set _p = _p ~ dbt_context_engineering.redshift_output_instruction(output_schema, 'json') -%}{%- endif -%}
+    {#- UNIFIED inference config carries the output cap. Keys are case-sensitive and SILENTLY IGNORED
+        if wrong; the CREATE EXTERNAL MODEL reference lists them camelCase (maxTokens, temperature,
+        topP, stopSequences), mapping to Bedrock's Converse InferenceConfiguration. -#}
+    {%- set _max_out = var('max_output_tokens', none) -%}
+    {{ fn }}(
+        {{ dbt_context_engineering.render_prompt(_p, input_column) }}
+        {%- if _max_out is not none %},
+        object('maxTokens', {{ _max_out | int }})
+        {%- endif %}
+    )
 {%- endmacro %}
 
 

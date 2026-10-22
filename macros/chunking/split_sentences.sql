@@ -70,6 +70,40 @@
 {%- endmacro %}
 
 
+{#- Redshift has no regexp_extract_all AND (unlike Snowflake) no capture-group backreferences in the
+    REGEXP_REPLACE replacement (the AWS docs expose no \1), so the Snowflake sentinel-with-backref
+    trick is out. Instead reproduce the SAME canonical rule — break after every maximal terminator
+    run — with a ZERO-WIDTH sentinel insert using Redshift's PCRE dialect (the 'p' parameter, which
+    the AWS docs demonstrate supports lookaround): a fixed-length lookbehind `(?<=[.!?])` plus a
+    lookahead `(?=[^.!?])` matches exactly the empty position between a terminator run and the next
+    sentence's first non-terminator, where a sentinel is inserted and SPLIT_TO_ARRAY then breaks.
+    (1) strip a leading terminator run (regexp_extract_all needs a non-terminator to start a match,
+    so it discards one) with a POSIX pass; (2) insert sentinels via the PCRE pass; (3) SPLIT_TO_ARRAY
+    to a SUPER array and UNNEST it with `AT` for the 0-based index (+1 to match the other engines).
+    Parity with regexp_extract_all('[^.!?]+[.!?]*') holds over the same tricky inputs assert_split_
+    rule_parity covers (terminator runs, leading terminators, decimals like "3.2"). Terminators are
+    PRESERVED on the sentence (the sentinel is zero-width), matching every other engine's output.
+    LIVE-VALIDATION DEFERRED (PCRE lookbehind + SUPER unnest shape). -#}
+{% macro redshift__split_sentences_core(relation, id_column, text_column) -%}
+    select
+        s.document_id,
+        s_idx + 1 as sentence_index,
+        trim(cast(s_val as {{ dbt.type_string() }})) as sentence_text
+    from (
+        select
+            {{ id_column }} as document_id,
+            split_to_array(
+                regexp_replace(
+                    regexp_replace({{ text_column }}, '^[.!?]+', ''),
+                    '(?<=[.!?])(?=[^.!?])', '~~CE_SENT~~', 1, 'p'
+                ),
+                '~~CE_SENT~~'
+            ) as _sentences
+        from {{ relation }}
+    ) s, s._sentences as s_val at s_idx
+{%- endmacro %}
+
+
 {#- Snowflake has no regexp_extract_all, so we reproduce the SAME boundary rule the other engines get
     from regexp_extract_all('[^.!?]+[.!?]*') — break after EVERY terminator run — rather than a
     different rule, so a given corpus splits identically on every engine (portability is the whole

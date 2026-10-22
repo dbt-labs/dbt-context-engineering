@@ -33,6 +33,12 @@
     sha2({{ text_expression }}, 256)
 {%- endmacro %}
 
+{#- Redshift's SHA2(string, bits) returns a lowercase hex string directly, same shape as
+    Snowflake/Databricks (not BigQuery's BYTES-needing-TO_HEX). -#}
+{% macro redshift__content_hash(text_expression) -%}
+    sha2({{ text_expression }}, 256)
+{%- endmacro %}
+
 {#- BigQuery's SHA256 returns BYTES; TO_HEX matches the hex-string shape every other engine returns. -#}
 {% macro bigquery__content_hash(text_expression) -%}
     to_hex(sha256({{ text_expression }}))

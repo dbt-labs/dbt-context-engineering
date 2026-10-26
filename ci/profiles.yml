@@ -1,7 +1,8 @@
 # Structure-only CI profiles. `dbt parse` resolves the graph and renders the wrapper dispatch
 # WITHOUT opening a warehouse connection, so placeholder values are fine here. (Note: `dbt compile`
 # DOES connect at startup on every cloud adapter, so the structure gate uses parse, not compile.)
-# Real credentials are NEVER stored in the repo — the live battery reads them from a GH secret.
+# Real credentials are NEVER stored in the repo, and no CI job connects to a warehouse. The live
+# battery runs locally against your own ~/.dbt profile; see TESTING.md §3 and §4.11.
 #
 # One profile, one target per cloud adapter, shared by every project in this repo (root package
 # and both integration_tests projects all declare profile: 'dbt_context_engineering', matching the

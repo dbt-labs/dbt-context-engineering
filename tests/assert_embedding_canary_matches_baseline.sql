@@ -10,9 +10,12 @@
   copy the printed rows into seeds/embedding_canary_baseline.csv, then `dbt seed`.
 
   severity is 'warn' by default (a benign live wobble should not fail a scheduled production
-  build) and 'error' in CI via embedding_canary_test_severity, so a PR cannot merge past real
-  drift. adapter is part of the join because a baseline vector from one warehouse's model was
-  never meant to be compared against another's.
+  build) and 'error' in integration_tests/cloud via embedding_canary_test_severity, which is
+  where the comparison is against a real warehouse embedding. No CI job sets it, and none could:
+  CI never opens a warehouse connection. Package-code drift is blocked separately, at error, by
+  the embedding-logic-hash job (ADR-0025). This test covers provider-side drift (ADR-0026).
+  adapter is part of the join because a baseline vector from one warehouse's model was never
+  meant to be compared against another's.
 -#}
 
 {% set threshold = var('embedding_canary_similarity_threshold', 0.999) %}

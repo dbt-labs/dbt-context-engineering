@@ -52,5 +52,10 @@ select
     {%- else -%}
     {{ dbt_context_engineering.embed('probe_text') }} as embedding
     {%- endif %},
-    '{{ target.type }}'                       as adapter
+    '{{ target.type }}'                       as adapter,
+    {#- The audit column ADR-0025 describes. It records which revision of this package's
+        embedding logic produced the row, which is the first thing worth knowing when a canary row
+        drifts: package change or provider change. Never joined on, never compared against the
+        baseline, never a fingerprint input. -#}
+    '{{ dbt_context_engineering.embedding_logic_hash() }}' as embedding_logic_hash
 from probes

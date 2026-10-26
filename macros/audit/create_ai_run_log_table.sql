@@ -46,22 +46,34 @@
   this package ships, same as that precedent.
 -#}
 {% macro create_ai_run_log_table() -%}
+    {#- Keep this ref unconditional so dbt can infer the hook's DAG dependency. The concrete
+        DDL target comes from the current target's graph node when execution is available. -#}
+    {%- set log_ref = ref('ai_run_log') -%}
+    {%- set configured_relation = dbt_context_engineering.ai_run_log_relation() -%}
+    {%- set log_relation = configured_relation if configured_relation is not none else log_ref -%}
     {%- if var('ai_functions_enabled', false) and execute -%}
-        {%- set _rel = ref('ai_run_log') -%}
         {%- if target.type == 'redshift' -%}
             {#- Redshift rejects CREATE TABLE IF NOT EXISTS ... AS (CTAS does not accept IF NOT
                 EXISTS), so check existence first, then plain CTAS. Race-free for the same reason
                 the shared path is: on-run-start runs once, serially, before any node starts, so
                 there is no concurrent writer to collide with. -#}
-            {%- if adapter.get_relation(_rel.database, _rel.schema, _rel.identifier) is none -%}
+            {%- if adapter.get_relation(log_relation.database, log_relation.schema, log_relation.identifier) is none -%}
                 {%- do run_query(
-                    "create table " ~ _rel ~ " as (" ~ dbt_context_engineering.ai_run_log_columns_sql() ~ ")"
+                    "create table " ~ log_relation ~ " as (" ~ dbt_context_engineering.ai_run_log_columns_sql() ~ ")"
                 ) -%}
             {%- endif -%}
         {%- else -%}
             {%- do run_query(
-                "create table if not exists " ~ _rel ~ " as (" ~ dbt_context_engineering.ai_run_log_columns_sql() ~ ")"
+                "create table if not exists " ~ log_relation ~ " as (" ~ dbt_context_engineering.ai_run_log_columns_sql() ~ ")"
             ) -%}
+        {%- endif -%}
+        {#- node_id column backfill (ADR-0033 on main, node identity): adapter-agnostic — works on
+            Redshift too via ALTER TABLE ADD COLUMN. -#}
+        {%- set log_columns = adapter.get_columns_in_relation(log_relation) -%}
+        {%- set column_names = '|' ~ (log_columns | map(attribute='name') | join('|') | lower) ~ '|' -%}
+        {%- if '|node_id|' not in column_names -%}
+            {%- do run_query("alter table " ~ log_relation ~ " add column node_id " ~ dbt.type_string()) -%}
+            {%- do adapter.commit() -%}
         {%- endif -%}
     {%- endif -%}
     {#- The CREATE above runs via run_query(), a separate statement, not this return value.

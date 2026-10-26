@@ -3,14 +3,12 @@
 
 embedding_logic_hash() identifies the embedding-relevant source in this package for audit
 purposes, never for gating reprocessing (see ADR-0025). The file set is derived by walking
-embed()'s call graph, a regex over `dbt_context_engineering.<name>(...)` calls starting from
-macros/functions/embed.sql, recursively, rather than hand-listed, so a newly-relevant file is
-picked up automatically the next time this script runs.
+embed()'s call graph from macros/functions/embed.sql rather than hand-listed, so a
+newly-relevant file is picked up automatically the next time this script runs.
 
-This only detects literal, package-qualified macro calls, the one convention this codebase uses
-everywhere today. dbt-core's own MacroParser does not track macro-to-macro dependencies in the
-manifest, so this regex walk is the actual mechanism, not a workaround for a better one. A
-dynamically-constructed macro name is invisible to it; see ADR-0025's Consequences section.
+The walk itself lives in ci/macro_call_graph.py, which documents which edges it can and cannot
+see. It follows both package-qualified calls and bare adapter.dispatch calls; a macro name
+assembled at run time remains invisible to it, per ADR-0025's Consequences section.
 
 Usage:
     python ci/verify_embedding_logic_hash.py            # check mode (default), exits 1 if stale
@@ -24,46 +22,12 @@ import hashlib
 import re
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-MACROS_DIR = REPO_ROOT / "macros"
+from macro_call_graph import MACROS_DIR, REPO_ROOT, walk_call_graph
+
 ENTRY_FILES = [MACROS_DIR / "functions" / "embed.sql"]
 GENERATED_MACRO_PATH = MACROS_DIR / "embedding" / "embedding_logic_hash.sql"
 
-CALL_PATTERN = re.compile(r"dbt_context_engineering\.(\w+)\s*\(")
 HASH_LITERAL_PATTERN = re.compile(r"return\(\s*'([0-9a-f]{64})'\s*\)")
-
-
-def _macro_def_pattern(macro_name: str) -> re.Pattern:
-    return re.compile(r"\{%-?\s*macro\s+" + re.escape(macro_name) + r"\s*\(")
-
-
-def _find_defining_file(macro_name: str, all_sql_files: list[Path]) -> Path | None:
-    pattern = _macro_def_pattern(macro_name)
-    for f in all_sql_files:
-        if pattern.search(f.read_text()):
-            return f
-    return None
-
-
-def walk_call_graph(entry_files: list[Path]) -> list[Path]:
-    """Fixed-point closure over embed()'s call graph. Returns a sorted, deduped file list."""
-    all_sql_files = list(MACROS_DIR.rglob("*.sql"))
-    visited: set[Path] = set()
-    queue = list(entry_files)
-
-    while queue:
-        current = queue.pop()
-        if current in visited:
-            continue
-        visited.add(current)
-
-        for match in CALL_PATTERN.finditer(current.read_text()):
-            macro_name = match.group(1)
-            defining_file = _find_defining_file(macro_name, all_sql_files)
-            if defining_file is not None and defining_file not in visited:
-                queue.append(defining_file)
-
-    return sorted(visited)
 
 
 def compute_hash(files: list[Path]) -> str:

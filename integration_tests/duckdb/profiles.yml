@@ -5,4 +5,10 @@ dbt_context_engineering:
     dev:
       type: duckdb
       path: 'target/tests.duckdb'
+      schema: main
+      threads: 1
+    ci:
+      type: duckdb
+      path: 'target/tests.duckdb'
+      schema: ci_branch
       threads: 1

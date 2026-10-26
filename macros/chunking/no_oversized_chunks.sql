@@ -5,9 +5,9 @@
   immediately, not a column they have to remember to query themselves.
 
   Deliberately a shipped test rather than a documented recipe: dbt's built-in accepted_values has
-  finicky boolean-representation behavior across engines, and this package has no dbt_utils
-  dependency anywhere else (content_hash, row_value_not_in, str_literal are all custom-built), so
-  reaching for dbt_utils.expression_is_true here would be the first dependency of its kind.
+  finicky boolean-representation behavior across engines, and nothing else in this package needs
+  dbt_utils (content_hash, row_value_not_in, str_literal are all custom-built), so reaching for
+  dbt_utils.expression_is_true here would make every consumer install it to get one expression.
 
   Not the default. exceeds_target is a data-quality signal about the SOURCE corpus (a unit larger
   than target_tokens), not a package-level correctness bug, so failing on it is an opt-in a

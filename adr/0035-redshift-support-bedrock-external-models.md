@@ -1,4 +1,4 @@
-# 0033. Redshift support: Bedrock inference UDFs, best-effort structured output, pure-SQL cosine
+# 35. Redshift support: Bedrock inference UDFs, best-effort structured output, pure-SQL cosine
 
 ## Status
 

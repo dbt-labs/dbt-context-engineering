@@ -37,7 +37,7 @@
         does not exist" error at run time; a live check (query the catalog for the function + its
         external model, and verify the IAM/Bedrock wiring) lands when live creds exist to verify it
         against. For now this documents the requirement and is a no-op so compile/parse passes — the
-        same Phase-0 stance require_databricks_serverless() and require_bq_model() take. -#}
+        same not-yet-implemented stance require_databricks_ai_runtime() takes. -#}
 {%- endmacro %}
 
 

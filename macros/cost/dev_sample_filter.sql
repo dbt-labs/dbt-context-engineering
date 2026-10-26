@@ -20,11 +20,14 @@
   dev-experience convenience that keeps a dev/CI run far below guard_batch's ceiling in the first
   place, distinct from it, not a replacement for it.
 
-  QUALIFY itself is portable across all four engines (duckdb, Snowflake, Databricks, BigQuery),
-  confirmed live: the same qualify row_number() over (order by <random>()) <= n clause ran
-  unmodified on all four. Only the random-ordering function name diverges (BigQuery: rand();
-  every other target: random()), one inline check, not worth a full dispatched macro for a
-  single word.
+  QUALIFY carries the clause on Snowflake, Databricks, and BigQuery — the same
+  qualify row_number() over (order by <random>()) <= n (only the random function name diverges:
+  BigQuery rand(), the rest random()). Two engines take a trailing `order by random() limit n`
+  instead, which is equivalent (order the rows randomly, keep n): Redshift has no QUALIFY at all,
+  and duckdb (1.5+) rejects a volatile expression inside a window ORDER BY ("ORDER BY window
+  expressions cannot be volatile"), so its QUALIFY-over-random() form no longer binds. The older
+  duckdb that once accepted it is the reason this macro's docstring long claimed four-engine QUALIFY
+  parity; that regressed engine-side, not here.
 
   Args:
     row_limit  overrides var('ai_sample_rows', none) for this call site specifically. Optional.
@@ -34,10 +37,11 @@
     {%- if limit is none -%}
         {{ return('') }}
     {%- endif -%}
-    {#- Redshift has no QUALIFY, but `order by random() limit n` is an equally valid TRAILING clause
-        that caps the model to a bounded random sample — same contract, same positional caveat as the
-        qualify form (the model must not also carry its own ORDER BY/LIMIT here). -#}
-    {%- if target.type == 'redshift' -%}
+    {#- Redshift (no QUALIFY) and duckdb (1.5+ rejects a volatile random() in a window ORDER BY:
+        "ORDER BY window expressions cannot be volatile") both take the equivalent trailing
+        `order by random() limit n` — same bounded-random-sample contract, same positional caveat as
+        the qualify form (the model must not also carry its own ORDER BY/LIMIT here). -#}
+    {%- if target.type in ['redshift', 'duckdb'] -%}
         {{ return('order by random() limit ' ~ limit) }}
     {%- endif -%}
     {%- set random_fn = 'rand()' if target.type == 'bigquery' else 'random()' -%}

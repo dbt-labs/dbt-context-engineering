@@ -26,12 +26,23 @@
 {%- endmacro %}
 
 {#- Redshift supports NEITHER the plain row-value form NOR BigQuery's wrapped tuple — it has no
-    multi-column/row-constructor IN at all. Rewrite as a correlated NOT EXISTS: the inner alias'd
-    columns equal the outer row's same-named columns, true when no matching row exists. NULL
-    semantics differ slightly from NOT IN (a null key here reads as "no match" -> dirty/reprocess
-    rather than NOT IN's "unknown"), which is the safe direction for the delta check and does not
-    arise in practice — the only caller (chunk's incremental delta) compares partition_key +
-    partition_hash, both non-null when the predicate is applied. -#}
+    multi-column/row-constructor IN at all. A correlated NOT EXISTS is a TRAP here: the inner
+    relation's columns share the outer row's column names (e.g. chunk_id, content_hash on both
+    sides), so an unqualified `col` in the correlated predicate binds to the INNER row, not the
+    outer one. The predicate then compares each inner row to itself and NOT EXISTS is false for any
+    non-empty table, so a changed row is never flagged — exactly the frozen-stale-value failure
+    ADR-0023 exists to prevent (a new key still arrives via the `unique_key not in (...)` branch
+    incremental_delta_predicate OR's this onto, which is why only the content-hash half breaks).
+    Both callers hit this: incremental_delta_predicate's content_hash_column delta AND chunk's
+    partition delta.
+
+    Keep ADR-0023's NON-CORRELATED NOT IN by collapsing the tuple into one comparable key on both
+    sides — md5 of the '|'-joined, null-coalesced columns — so a single-column IN suffices and no
+    outer column can be shadowed. (Keys/hashes here contain no '|', so the join is unambiguous;
+    md5 collision is negligible.) -#}
 {% macro redshift__row_value_not_in(columns, relation) -%}
-    not exists (select 1 from {{ relation }} _ce_rvni where {% for c in columns %}{% if not loop.first %} and {% endif %}_ce_rvni.{{ c }} = {{ c }}{% endfor %})
+    {%- set _parts = [] -%}
+    {%- for c in columns -%}{%- do _parts.append("coalesce(cast(" ~ c ~ " as varchar), '')") -%}{%- endfor -%}
+    {%- set _key = "md5(" ~ (_parts | join(" || '|' || ")) ~ ")" -%}
+    {{ _key }} not in (select {{ _key }} from {{ relation }})
 {%- endmacro %}

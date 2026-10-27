@@ -1,16 +1,17 @@
--- LIVE validation of embed + the pure-SQL SUPER-array cosine (redshift__vector_search). The query
--- text is near-identical to doc 1, so it must rank #1; exactly top_k=3 rows; scores in [-1, 1] and
--- non-increasing by rank. Fail rows only.
+-- LIVE validation of embed + vector_search on this warehouse — including BigQuery's divergent
+-- VECTOR_SEARCH table function. The query text is near-identical to utterance 2, so it must rank #1;
+-- exactly top_k=3 rows are returned; cosine scores stay in [-1, 1] and are non-increasing by rank.
+-- Fail rows only.
 with r as (
-    select id, score, row_number() over (order by score desc) as rn
-    from {{ ref('rs_search') }}
+    select utterance_id, score, row_number() over (order by score desc) as rn
+    from {{ ref('search') }}
 )
 select 'wrong_count' as issue
 from (select count(*) as n from r) c
 where c.n <> 3
 union all
 select 'wrong_top_hit' as issue
-from r where rn = 1 and id <> 1
+from r where rn = 1 and utterance_id <> 2
 union all
 select 'score_out_of_range' as issue
 from r where score > 1.0000001 or score < -1.0000001

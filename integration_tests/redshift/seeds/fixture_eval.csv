@@ -1,0 +1,9 @@
+example_id,input_text,expected_label,predicted_label,evidence
+e1,Our nightly pipeline keeps breaking and it is painful.,pain_point,pain_point,keeps breaking
+e2,The team cannot tell which model failed.,pain_point,pain_point,cannot tell which model failed
+e3,"Data cannot leave our warehouse, that is required.",requirement,requirement,Data cannot leave our warehouse
+e4,We need SSO before rollout.,requirement,requirement,need SSO
+e5,Your pricing is higher than the competitor.,objection,objection,pricing is higher
+e6,We are ready to sign this quarter.,buying_signal,buying_signal,ready to sign
+e7,The security review worries me a little.,objection,pain_point,security review worries me
+e8,"Thanks, that is all for today.",other,requirement,all for today

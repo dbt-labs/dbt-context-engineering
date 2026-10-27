@@ -31,15 +31,19 @@ vars:
   # On Redshift the model vars name the Bedrock inference UDFs (minted by create_bedrock_function),
   # NOT model strings — the model id lives inside the external-model object the UDF wraps.
   model_generate: ce_text          # serves generate / classify / extract / ai_agg
+  model_classify: ce_text          # (falls back to model_generate anyway; explicit for clarity)
+  model_extract: ce_text
+  model_agg: ce_text               # ai_agg on Redshift routes through the text UDF
   embedding_model: ce_embed        # serves embed
   chunk_target_tokens: 512
   chunk_overlap_tokens: 0
-  max_output_tokens: 256           # also exercises the UNIFIED maxTokens (camelCase) cap
+  max_output_tokens: 1024          # match cloud; also exercises the UNIFIED maxTokens (camelCase) cap
 
 models:
   # Package's own models disabled except the audit log (Phase 3). monitoring/embedding_canary is
   # deliberately NOT enabled: its scalar-cosine probe is unsupported on Redshift (the dispatched
-  # canary macro raises with guidance), so enabling it would fail by design.
+  # canary macro raises with guidance), so enabling it would fail by design. The embedding_canary
+  # baseline seed is likewise left disabled (shipped off by default).
   dbt_context_engineering:
     +enabled: false
     audit:

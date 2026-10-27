@@ -61,6 +61,13 @@
                 {%- do run_query(
                     "create table " ~ log_relation ~ " as (" ~ dbt_context_engineering.ai_run_log_columns_sql() ~ ")"
                 ) -%}
+                {#- Reconcile dbt's relation cache with reality. dbt snapshots which relations exist
+                    at run start, BEFORE this on-run-start hook fires (Fusion especially). Without
+                    this, the ai_run_log MODEL's own first incremental build still believes the table
+                    is absent and issues a CREATE, which then collides ("relation already exists")
+                    with the table this bootstrap just made. Registering it here makes the model take
+                    its append path instead. No-op risk is nil: we only register what we created. -#}
+                {%- do adapter.cache_added(log_relation.incorporate(type='table')) -%}
             {%- endif -%}
         {%- else -%}
             {%- do run_query(
@@ -72,7 +79,7 @@
         {%- set log_columns = adapter.get_columns_in_relation(log_relation) -%}
         {%- set column_names = '|' ~ (log_columns | map(attribute='name') | join('|') | lower) ~ '|' -%}
         {%- if '|node_id|' not in column_names -%}
-            {%- do run_query("alter table " ~ log_relation ~ " add column node_id " ~ dbt.type_string()) -%}
+            {%- do run_query("alter table " ~ log_relation ~ " add column node_id " ~ ('varchar(65535)' if target.type == 'redshift' else dbt.type_string())) -%}
             {%- do adapter.commit() -%}
         {%- endif -%}
     {%- endif -%}

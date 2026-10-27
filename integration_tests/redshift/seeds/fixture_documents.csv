@@ -1,0 +1,4 @@
+document_id,document_text,title,citation_url
+doc_1,Data pipelines break often. Observability is the core need! Can we see which model failed?,Pipeline Reliability Notes,https://notion.example.com/doc_1
+doc_2,The nightly load is slow. It needs to finish before the morning refresh.,Nightly Load Runbook,https://notion.example.com/doc_2
+doc_3,A single sentence document with no terminator,Untitled Draft,https://notion.example.com/doc_3

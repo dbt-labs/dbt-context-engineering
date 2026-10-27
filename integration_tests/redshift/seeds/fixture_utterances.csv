@@ -1,0 +1,11 @@
+utterance_id,call_id,speaker,turn_index,utterance_text
+1,call_001,rep,1,Thanks for hopping on today. How are things going with the current setup?
+2,call_001,customer,2,Honestly a bit rough. Our pipeline keeps breaking on the nightly load.
+3,call_001,customer,3,And nobody on the team can tell which model actually failed.
+4,call_001,rep,4,Got it. So observability into the DAG is the main pain right now?
+5,call_001,customer,5,Exactly. That plus cost. We had a backfill last month that blew the budget.
+6,call_001,rep,6,That is a common one. Let me walk through how the run log would catch that.
+7,call_002,rep,1,Quick follow up on the security review. Did legal get back to you?
+8,call_002,customer,2,They did. They are fine as long as data stays in our own warehouse.
+9,call_002,customer,3,No data can leave the account. That is the hard requirement.
+10,call_002,rep,4,"Understood. Everything here runs as models in your warehouse, nothing leaves."

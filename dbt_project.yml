@@ -34,9 +34,14 @@ vars:
   # documented limit. Raise only if the engine's own limit has been raised.
   decide_choice_cap_databricks: 255
   decide_choice_cap_snowflake: 32
-  # Snowflake Decision is in private preview and unvalidated here; true opts an account with
-  # preview access into decide() on Snowflake.
+  decide_choice_cap_snowflake_fast: 16
+  # Snowflake Decision is in private preview; true opts an enrolled account (with
+  # CORTEX_ENABLED_CROSS_REGION = 'ANY_REGION') into decide() on Snowflake.
   decide_snowflake_preview: false
+  # snowflake-decision-fast (Snowflake's recommendation for most workloads: lower latency, up to
+  # 16 labels) or snowflake-decision (higher accuracy, up to 32 labels). Confidence is computed
+  # differently by each, so a vocabulary threshold calibrated on one does not carry over.
+  decide_snowflake_model: snowflake-decision-fast
   # Fixed-vocabulary pipeline on an engine where decide() is unavailable: 'error' stops with a
   # message naming the fallback; 'classify' labels with classify() and marks rows 'unscored'.
   decide_fallback: error

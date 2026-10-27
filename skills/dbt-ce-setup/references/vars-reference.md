@@ -21,8 +21,9 @@ Every configuration `var` the package reads, its default, and what it controls. 
 | `max_est_tokens` | `5000000` | `guard_batch` ceiling on estimated tokens: input text, plus the prompt template and output allowance when the guard is given a `prompt`. |
 | `est_output_tokens_per_row` | `null` | per-row output allowance in the estimate when a `prompt` is passed. `null` falls back to `max_output_tokens`, then 0. |
 | `max_agg_group_tokens` | `100000` | `guard_agg_batch` per-group ceiling for `ai_agg` (required on Databricks). |
-| `decide_choice_cap_databricks` / `decide_choice_cap_snowflake` | `255` / `32` | most labels a `decide` choice question may carry, the engines' documented limits. Raise only if the engine raised its own. |
-| `decide_snowflake_preview` | `false` | `true` opts a Snowflake account with Snowflake Decision preview access into `decide` (unvalidated path). |
+| `decide_choice_cap_databricks` / `decide_choice_cap_snowflake` / `decide_choice_cap_snowflake_fast` | `255` / `32` / `16` | most labels a `decide` choice question may carry, the documented limits of `ai_decide`, `snowflake-decision` and `snowflake-decision-fast`. Raise only if the engine raised its own. |
+| `decide_snowflake_preview` | `false` | `true` opts a Snowflake account enrolled in the Snowflake Decision preview, with `CORTEX_ENABLED_CROSS_REGION = 'ANY_REGION'`, into `decide`. |
+| `decide_snowflake_model` | `snowflake-decision-fast` | Snowflake Decision model: `snowflake-decision-fast` (Snowflake's recommendation for most workloads: lower latency, up to 16 labels) or `snowflake-decision` (higher accuracy, up to 32 labels). Confidence differs between them, so recalibrate thresholds on a switch. |
 | `decide_fallback` | `error` | fixed-vocabulary pipeline where `decide` is unavailable: `error` stops with a message, `classify` labels with `classify()` and marks rows `unscored`. |
 | `allow_full_reembed` | (unset) | wire to an incremental AI model's `full_refresh` config so a stray `--full-refresh` can't re-bill the corpus. |
 | `ai_sample_rows` | `null` | `dev_sample_filter` row cap. A dev convenience, **not** a spend guard. |

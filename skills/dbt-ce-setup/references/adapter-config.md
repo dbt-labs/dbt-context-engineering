@@ -29,6 +29,11 @@ Notes:
 - `max_output_tokens` maps to `AI_COMPLETE`'s `max_tokens` (applies to `generate`; `classify`/
   `extract` are bounded by their output schema, no separate cap).
 - No thinking-budget knob, Cortex models don't run Gemini-style default thinking.
+- **`decide` (Snowflake Decision, private preview)** needs an enrolled account with
+  `ALTER ACCOUNT SET CORTEX_ENABLED_CROSS_REGION = 'ANY_REGION'`; without it the call fails with
+  "The model you requested is unavailable in your region". Then set
+  `decide_snowflake_preview: true`, and optionally `decide_snowflake_model:
+  snowflake-decision-fast`.
 
 ## Databricks
 

@@ -24,17 +24,19 @@
 
   ENGINES (decide_available is the single source of truth):
     - Databricks: ai_decide (Beta). Returns VARIANT {response: {answers}, metadata, error_message}.
-    - Snowflake: Snowflake Decision via AI_COMPLETE, private preview. Written against the
-      documented shape and disabled unless var decide_snowflake_preview is true.
-      LIVE-VALIDATION DEFERRED.
+    - Snowflake: Snowflake Decision via AI_COMPLETE, private preview. Off unless var
+      decide_snowflake_preview is true; the account must be enrolled and have
+      CORTEX_ENABLED_CROSS_REGION = 'ANY_REGION'. var decide_snowflake_model picks
+      snowflake-decision-fast (default, Snowflake's recommendation) or snowflake-decision.
+      Returns OBJECT {value: {answers}, error}.
     - BigQuery and others: no decision model. classify() is the supported route.
-  LIVE-VALIDATION: Databricks.
+  LIVE-VALIDATION: Databricks, Snowflake (both models).
 -#}
 {% macro decide(state_column, questions) -%}
     {{ dbt_context_engineering.require_ai_functions_enabled('decide') }}
     {{ dbt_context_engineering.require_safe_materialization('decide') }}
     {{ dbt_context_engineering.require_full_refresh_gate('decide') }}
-    {%- do dbt_context_engineering.validate_decide_questions(questions, dbt_context_engineering.decide_choice_cap()) -%}
+    {%- do dbt_context_engineering.validate_decide_questions(questions, dbt_context_engineering.decide_limits()) -%}
     {%- if not dbt_context_engineering.decide_available() -%}
         {#- execute-gated, same reasoning as default__classify: parse renders every model, and the
             return value is spliced into the caller's SELECT, so parse needs a placeholder. -#}
@@ -66,38 +68,64 @@
         ~ "does not yet offer a decision model this package can call. Use classify() instead; it "
         ~ "labels from the same fixed set, without a confidence. Supported: databricks." -%}
     {%- if target.type == 'snowflake' -%}
-        {%- set msg = msg ~ " Snowflake Decision (AI_COMPLETE, private preview) is written but "
-            ~ "not yet validated; an account with preview access can opt in with var "
+        {%- set msg = msg ~ " Snowflake Decision (AI_COMPLETE) is in private preview: an enrolled "
+            ~ "account with CORTEX_ENABLED_CROSS_REGION = 'ANY_REGION' can opt in with var "
             ~ "decide_snowflake_preview: true." -%}
     {%- endif -%}
     {{ return(msg) }}
 {%- endmacro %}
 
 
-{#- decide_choice_cap() -> the most labels a choice question may carry on the current engine, from
-    the engine's documented limit, overridable by var in case an engine raises it. none where
-    decide is unavailable. -#}
-{% macro decide_choice_cap() -%}
-    {%- if target.type == 'databricks' -%}
-        {{ return(var('decide_choice_cap_databricks', 255) | int) }}
-    {%- elif target.type == 'snowflake' -%}
-        {{ return(var('decide_choice_cap_snowflake', 32) | int) }}
+{#- decide_snowflake_model() -> the Snowflake Decision model AI_COMPLETE calls, from var
+    decide_snowflake_model. Raises on any other value, since its limits would be unknown. -#}
+{% macro decide_snowflake_model() -%}
+    {%- set m = var('decide_snowflake_model', 'snowflake-decision-fast') | string | trim | lower -%}
+    {%- if m not in ['snowflake-decision', 'snowflake-decision-fast'] and execute -%}
+        {{ exceptions.raise_compiler_error("decide: var decide_snowflake_model must be 'snowflake-decision' or 'snowflake-decision-fast', got '" ~ m ~ "'.") }}
     {%- endif -%}
-    {{ return(none) }}
+    {{ return(m) }}
 {%- endmacro %}
 
 
-{#- validate_decide_questions(questions, cap) -> raises a compiler error naming the first problem.
-    Execute-gated like the require_* checks: parse renders every model, so an unguarded raise here
-    would break parsing of the whole project, not just the model with the bad question. -#}
-{% macro validate_decide_questions(questions, cap=none) -%}
+{#- decide_limits() -> the current engine's documented request limits, as a dict for
+    validate_decide_questions: choice_min / choice_max labels per choice question, max_questions,
+    max_options (choice labels + 2 per noul + levels per score, summed over the request) and
+    max_id_length. A limit the engine does not document is absent, not guessed. The choice caps
+    are vars in case an engine raises them. Empty where decide is unavailable. -#}
+{% macro decide_limits() -%}
+    {%- if target.type == 'databricks' -%}
+        {{ return({'choice_min': 1, 'choice_max': var('decide_choice_cap_databricks', 255) | int}) }}
+    {%- elif target.type == 'snowflake' -%}
+        {%- if dbt_context_engineering.decide_snowflake_model() == 'snowflake-decision-fast' -%}
+            {{ return({'choice_max': var('decide_choice_cap_snowflake_fast', 16) | int}) }}
+        {%- endif -%}
+        {{ return({'choice_min': 2, 'choice_max': var('decide_choice_cap_snowflake', 32) | int,
+                   'max_questions': 32, 'max_options': 256, 'max_id_length': 64}) }}
+    {%- endif -%}
+    {{ return({}) }}
+{%- endmacro %}
+
+
+{#- validate_decide_questions(questions, limits) -> raises a compiler error naming the first problem.
+    limits is decide_limits()' dict; any key may be absent. Execute-gated like the require_*
+    checks: parse renders every model, so an unguarded raise here would break parsing of the whole
+    project, not just the model with the bad question. -#}
+{% macro validate_decide_questions(questions, limits=none) -%}
     {%- if not execute -%}{{ return(none) }}{%- endif -%}
+    {%- set limits = limits or {} -%}
     {%- if questions is not mapping or (questions | length) == 0 -%}
         {%- do exceptions.raise_compiler_error("decide: questions must be a non-empty dict keyed by question id.") -%}
     {%- endif -%}
+    {%- if limits.get('max_questions') is not none and (questions | length) > limits['max_questions'] -%}
+        {%- do exceptions.raise_compiler_error("decide: " ~ (questions | length) ~ " questions; " ~ target.type ~ " accepts at most " ~ limits['max_questions'] ~ " per call. Split them across decide() calls.") -%}
+    {%- endif -%}
+    {%- set ns_opts = namespace(total=0) -%}
     {%- for qid, q in questions.items() -%}
         {%- if not modules.re.match('^[A-Za-z_][A-Za-z0-9_]*$', qid | string) -%}
             {%- do exceptions.raise_compiler_error("decide: question id '" ~ qid ~ "' must be letters, digits and underscores, not starting with a digit, so decide_answer can address it.") -%}
+        {%- endif -%}
+        {%- if limits.get('max_id_length') is not none and (qid | string | length) > limits['max_id_length'] -%}
+            {%- do exceptions.raise_compiler_error("decide: question id '" ~ qid ~ "' is " ~ (qid | string | length) ~ " characters; " ~ target.type ~ " accepts at most " ~ limits['max_id_length'] ~ ".") -%}
         {%- endif -%}
         {%- if q is not mapping -%}
             {%- do exceptions.raise_compiler_error("decide: question '" ~ qid ~ "' must be a dict with type, instructions and criteria.") -%}
@@ -122,9 +150,13 @@
                     {%- do exceptions.raise_compiler_error("decide: choice question '" ~ qid ~ "' needs every label and description to be a non-empty string.") -%}
                 {%- endif -%}
             {%- endfor -%}
-            {%- if cap is not none and (c | length) > cap -%}
-                {%- do exceptions.raise_compiler_error("decide: choice question '" ~ qid ~ "' has " ~ (c | length) ~ " labels; " ~ target.type ~ " accepts at most " ~ cap ~ " (var decide_choice_cap_" ~ target.type ~ "). Split it into a hierarchical vocabulary.") -%}
+            {%- if limits.get('choice_max') is not none and (c | length) > limits['choice_max'] -%}
+                {%- do exceptions.raise_compiler_error("decide: choice question '" ~ qid ~ "' has " ~ (c | length) ~ " labels; " ~ target.type ~ " accepts at most " ~ limits['choice_max'] ~ " (var decide_choice_cap_" ~ target.type ~ "). Split it into a hierarchical vocabulary.") -%}
             {%- endif -%}
+            {%- if limits.get('choice_min') is not none and (c | length) < limits['choice_min'] -%}
+                {%- do exceptions.raise_compiler_error("decide: choice question '" ~ qid ~ "' has " ~ (c | length) ~ " label(s); " ~ target.type ~ " requires at least " ~ limits['choice_min'] ~ ". Ask a noul question for a single yes / no label.") -%}
+            {%- endif -%}
+            {%- set ns_opts.total = ns_opts.total + (c | length) -%}
         {%- elif q.type == 'score' -%}
             {%- if c is mapping or c is string or c is not iterable or (c | length) < 2 or (c | length) > 10 -%}
                 {%- do exceptions.raise_compiler_error("decide: score question '" ~ qid ~ "' needs criteria as a list of 2 to 10 levels, lowest first.") -%}
@@ -139,6 +171,7 @@
                 {%- endif -%}
                 {%- set ns.seen = ns.seen + [level] -%}
             {%- endfor -%}
+            {%- set ns_opts.total = ns_opts.total + (c | length) -%}
         {%- elif c is not none -%}
             {%- if c is not mapping or (c.keys() | reject('in', ['true', 'false']) | list) -%}
                 {%- do exceptions.raise_compiler_error("decide: noul question '" ~ qid ~ "' criteria may only hold 'true' and 'false' descriptions.") -%}
@@ -149,7 +182,11 @@
                 {%- endif -%}
             {%- endfor -%}
         {%- endif -%}
+        {%- if q.type == 'noul' -%}{%- set ns_opts.total = ns_opts.total + 2 -%}{%- endif -%}
     {%- endfor -%}
+    {%- if limits.get('max_options') is not none and ns_opts.total > limits['max_options'] -%}
+        {%- do exceptions.raise_compiler_error("decide: the questions carry " ~ ns_opts.total ~ " options in all (choice labels, 2 per noul, levels per score); " ~ target.type ~ " accepts at most " ~ limits['max_options'] ~ " per call. Split them across decide() calls.") -%}
+    {%- endif -%}
 {%- endmacro %}
 
 
@@ -196,19 +233,22 @@
 {%- endmacro %}
 
 
-{#- Snowflake Decision through AI_COMPLETE, per Snowflake's announcement: the request is JSON with
-    `state` and `questions`. LIVE-VALIDATION DEFERRED: our only call (2026-10-20) failed before
-    reaching the model, "The model you requested is unavailable in your region". The request is
-    assembled as text rather than with object_construct / parse_json, because a Snowflake OBJECT
-    does not keep key order and the questions must go out in declared order (decide_questions_json);
-    only the row's state is JSON-encoded by Snowflake. to_varchar makes the parse indifferent to
-    whether AI_COMPLETE hands back text or an OBJECT for this model. -#}
+{#- Snowflake Decision through AI_COMPLETE: the request is JSON with `state` and `questions`. The
+    request is assembled as text rather than with object_construct / parse_json, because a
+    Snowflake OBJECT does not keep key order and the questions must go out in declared order
+    (decide_questions_json); only the row's state is JSON-encoded by Snowflake.
+    return_error_details => true, because without it a failed row is a bare NULL, indistinguishable
+    from a row with no answer; with it the result is an OBJECT {value: {answers}, error}, which
+    to_varchar rejects, hence to_variant. The model name is stored in the result, since
+    Snowflake's own result does not name one. -#}
 {% macro snowflake__decide(state_column, questions) -%}
-    parse_json(to_varchar(ai_complete(
-        model => 'snowflake-decision',
+    {%- set model = dbt_context_engineering.decide_snowflake_model() -%}
+    object_insert(to_object(to_variant(ai_complete(
+        model => {{ dbt_context_engineering.str_literal(model) }},
         prompt => '{"state": ' || to_json(to_variant({{ state_column }})) || ', "questions": '
-            || {{ dbt_context_engineering.str_literal(dbt_context_engineering.decide_questions_json(questions)) }} || '}'
-    )))
+            || {{ dbt_context_engineering.str_literal(dbt_context_engineering.decide_questions_json(questions)) }} || '}',
+        return_error_details => true
+    ))), 'model', {{ dbt_context_engineering.str_literal(model) }})
 {%- endmacro %}
 
 
@@ -238,12 +278,11 @@
 {%- endmacro %}
 
 
-{#- Snowflake Decision's documented result is an `answers` object with no envelope, and its noul
-    answer names the probability `noul` where Databricks says `probability`. LIVE-VALIDATION
-    DEFERRED. -#}
+{#- snowflake__decide wraps the answers in `value` (return_error_details), and Snowflake's noul
+    answer names the probability `noul` where Databricks says `probability`. -#}
 {% macro snowflake__decide_answer(decision, question, field, as_type) -%}
     {%- set f = 'noul' if field == 'probability' else field -%}
-    cast(({{ decision }}):answers.{{ question }}.{{ f }} as {{ as_type }})
+    cast(({{ decision }}):value.answers.{{ question }}.{{ f }} as {{ as_type }})
 {%- endmacro %}
 
 
@@ -259,18 +298,16 @@
     cast({{ decision }}:error_message as string)
 {%- endmacro %}
 
-{#- Snowflake surfaces a failed AI_COMPLETE call as a query error, not an in-band field, so there
-    is no per-row error to read. -#}
 {% macro snowflake__decide_error(decision) -%}
-    cast(null as varchar)
+    cast(({{ decision }}):error as varchar)
 {%- endmacro %}
 
 
 {#-
   decide_model(decision) -> what the engine reports about the model that answered, for the
   vocabulary pipeline's decision_model column. Neither native path exposes a versioned model id:
-  Databricks reports only the ai_decide function version (metadata.version), Snowflake only the
-  model name.
+  Databricks reports only the ai_decide function version (metadata.version); on Snowflake it is the
+  model name snowflake__decide stored with the row.
 -#}
 {% macro decide_model(decision) -%}
     {{ return(adapter.dispatch('decide_model', 'dbt_context_engineering')(decision)) }}
@@ -285,5 +322,5 @@
 {%- endmacro %}
 
 {% macro snowflake__decide_model(decision) -%}
-    cast('snowflake-decision' as varchar)
+    cast(({{ decision }}):model as varchar)
 {%- endmacro %}

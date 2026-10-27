@@ -113,21 +113,30 @@ decide_answer(decision, question, field, as_type=none)   decide_error(decision) 
 ```
 - `questions`: dict keyed by question id (letters, digits, underscores). Each has `type`,
   `instructions` and `criteria`:
-  - `choice`: `criteria` maps label to description, 1 to `decide_choice_cap_<engine>` labels
-    (Databricks 255, Snowflake 32). Fields: `choice`, `confidence`, `probabilities`,
+  - `choice`: `criteria` maps label to description, up to `decide_choice_cap_<engine>` labels
+    (Databricks 1 to 255; Snowflake 2 to 32 on `snowflake-decision`, up to 16 on
+    `snowflake-decision-fast`). Fields: `choice`, `confidence`, `probabilities`,
     `probabilities.<label>`.
   - `noul`: optional `criteria` with `true` / `false` descriptions. Field: `probability`.
   - `score`: `criteria` is a list of 2-10 levels, lowest first. Fields: `score`, `confidence`,
     `legend`, `probabilities`.
-- Malformed questions fail at compile time.
+- Malformed questions fail at compile time, as do question sets over the engine's documented
+  limits (Snowflake `snowflake-decision`: 32 questions, 256 options in all counting 2 per noul
+  and one per score level, ids up to 64 characters).
 - Returns the raw engine result. Materialize it, then read fields in a downstream model; reading
   several fields of a `decide()` call in one query can call the model once per field.
-- Engines: Databricks `ai_decide` (Beta). Snowflake `AI_COMPLETE('snowflake-decision')`, private
-  preview, only with `decide_snowflake_preview: true`, unvalidated. BigQuery: none; raises, naming
-  `classify`. `decide_available()` reports which applies.
-- `decide_error` is Databricks' per-row `error_message` (Snowflake fails the query instead).
-  `decide_model` is `ai_decide/<function version>` on Databricks; neither engine exposes a
-  versioned model id.
+- Engines: Databricks `ai_decide` (Beta). Snowflake `AI_COMPLETE` with `snowflake-decision-fast`
+  (default) or `snowflake-decision` via `decide_snowflake_model`, private preview, only with
+  `decide_snowflake_preview: true` on an enrolled account with
+  `CORTEX_ENABLED_CROSS_REGION = 'ANY_REGION'`. BigQuery: none; raises, naming `classify`.
+  `decide_available()` reports which applies.
+- `decide_error` is the engine's per-row error: Databricks' `error_message`, Snowflake's `error`
+  (requested with `return_error_details`, since a failed Snowflake row is otherwise a bare NULL).
+  `decide_model` is `ai_decide/<function version>` on Databricks and the model name on Snowflake;
+  neither engine exposes a versioned model id.
+- Snowflake probabilities never reach 0 or 1 (a noul stays within about 0.08 to 0.92), scores are
+  fractional positions from 0 to n - 1, and the two Snowflake models compute confidence
+  differently. Calibrate a confidence threshold per engine and model on a golden set.
 - Cost: `log_ai_run('decide', ..., prompt=decide_questions_json(questions))` counts the questions on every row
   with no output allowance, since a decision model returns typed answers rather than generated
   text. Neither engine publishes how `decide` is billed, so treat its `est_tokens` as request size.

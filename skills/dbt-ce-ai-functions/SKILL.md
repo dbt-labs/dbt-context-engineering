@@ -76,7 +76,9 @@ probability per label and a confidence), `noul` (probability a statement is true
 (position on an ordered rubric). It returns the engine's raw result; store it in one model and
 read fields in another with `decide_answer(col, question, field, as_type)`, so the model is called
 once per row. Runs on Databricks (`ai_decide`). On Snowflake it is off unless the account has
-Snowflake Decision preview access and sets `decide_snowflake_preview: true`. On BigQuery it raises
+Snowflake Decision preview access, has `CORTEX_ENABLED_CROSS_REGION = 'ANY_REGION'`, and sets
+`decide_snowflake_preview: true` (`decide_snowflake_model` picks `snowflake-decision` or
+`snowflake-decision-fast`). On BigQuery it raises
 and points to `classify`. Log it with `log_ai_run('decide', ..., prompt=decide_questions_json(questions))`.
 
 ```sql

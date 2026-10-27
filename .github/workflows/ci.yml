@@ -304,8 +304,8 @@ jobs:
             dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
               --select probe_decide_unsupported --vars '{gate_probe: decide_unsupported, ai_functions_enabled: true}'
       - name: decide rejects malformed questions at compile time
-        # One malformed question set per case, each asserting its own message. The choice cap is
-        # passed as 2 by the probe, since duckdb has no engine cap.
+        # One malformed question set per case, each asserting its own message. The probe passes
+        # small explicit limits, since duckdb has no engine limits.
         run: |
           check() {
             ci/expect_failure.sh "$2" \
@@ -322,6 +322,10 @@ jobs:
           check score_repeat "repeats the level 'low'"
           check choice_blank "every label and description to be a non-empty string"
           check noul_blank "true / false descriptions to be non-empty strings"
+          check under_min "requires at least 2"
+          check too_many_q "4 questions; duckdb accepts at most 3"
+          check id_too_long "is 9 characters; duckdb accepts at most 8"
+          check over_options "carry 6 options in all"
       - name: vocabulary pipeline stops without a decision model and names the classify fallback
         # The default decide_fallback is 'error'. The positive control sets it to 'classify' and
         # requires classify's own "not implemented for duckdb" message instead, which is only

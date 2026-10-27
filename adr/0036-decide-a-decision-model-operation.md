@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted, 2026-10-20.
+Accepted, 2026-10-20; Snowflake path validated live 2026-10-27.
 
 ## Concept
 
@@ -30,11 +30,16 @@ an ordered rubric). Engine support, researched 2026-10-20:
 | Engine | Path | Row-level SQL expression | Status |
 |---|---|---|---|
 | Databricks | `ai_decide(state, questions[, options])` | Yes | Beta, region-limited, not on SQL Classic |
-| Snowflake | `AI_COMPLETE(model => 'snowflake-decision', prompt => TO_JSON({state, questions}))` | Yes | Private preview since 2026-10-07 |
+| Snowflake | `AI_COMPLETE(model => 'snowflake-decision' \| 'snowflake-decision-fast', prompt => TO_JSON({state, questions}))` | Yes | Private preview since 2026-10-07; the account needs `CORTEX_ENABLED_CROSS_REGION = 'ANY_REGION'` |
 | BigQuery | None. `AI.CLASSIFY` takes label descriptions and returns the label only | No | |
 
 Databricks' `questions` argument must be a constant: the same question definitions for every row.
-A choice question allows 1 to 255 labels on Databricks; Snowflake's announcement cites 32.
+A choice question allows 1 to 255 labels on Databricks. Snowflake documents two models.
+`snowflake-decision` takes 2 to 32 labels per choice, 2 to 10 score levels, at most 32 questions
+and 256 options per request (a noul counts 2, a score its levels), question ids of 1 to 64
+characters, and a 256 KiB request. `snowflake-decision-fast`, which Snowflake recommends for
+most workloads, takes up to 16 labels per choice within a 32k-token request; Snowflake documents
+no other limits for it.
 
 A live `ai_decide` call on Databricks, one choice and one noul question over one ticket, returned:
 
@@ -48,20 +53,46 @@ A live `ai_decide` call on Databricks, one choice and one noul question over one
 ```
 
 The result names no model. `metadata.version` is the `ai_decide` function version, and Databricks
-documents that the underlying model may change. Snowflake's documented result is an `answers`
-object without that envelope, and its noul answer names the probability `noul` rather than
-`probability`.
+documents that the underlying model may change.
 
-Our Snowflake account returned, with the package's Snowflake path enabled, on dbt Core and Fusion
-alike:
+Snowflake's result is an OBJECT holding only `answers`, with no envelope, and its noul answer names
+the probability `noul` rather than `probability`. A row that fails returns a bare NULL. With
+`return_error_details => true` the result is wrapped as `{value, error}`. Our account returned,
+for one choice, one noul and one score question on `snowflake-decision` (2026-10-27):
 
+```json
+{"value": {"answers": {
+   "frustrated": {"noul": 0.8807970779778823, "type": "noul"},
+   "tone": {"confidence": 0.808393287368993, "legend": {"0": "calm", "1": "concerned", "2": "upset"},
+            "probabilities": {"0": 0.009689957666694409, "1": 0.11804785075397696,
+                              "2": 0.8722621915793286},
+            "score": 1.8625722339126343, "type": "score"},
+   "topic": {"choice": "pipelines", "confidence": 0.9866142981514305,
+             "probabilities": {"pipelines": 0.9933071490757153, "pricing": 0.006692850924284856},
+             "type": "choice"}}},
+ "error": null}
 ```
-The model you requested is unavailable in your region. To access it, enable cross region
-inference with ANY_REGION.
+
+and, for a choice with one label, `null` without `return_error_details` and with it:
+
+```json
+{"value": null,
+ "error": "invalid input format: question \"topic\" declares 1 options; at least 2 are required"}
 ```
 
-The statement compiled and reached the model check, so the SQL shape is accepted. No answer has
-been returned to us.
+`snowflake-decision-fast` returned no error for the same one-label request, consistent with
+Snowflake documenting only an upper bound for it. Both models reject an unknown question type.
+
+Without `CORTEX_ENABLED_CROSS_REGION = 'ANY_REGION'` the same call fails with "The model you
+requested is unavailable in your region. To access it, enable cross region inference with
+ANY_REGION."
+
+A score is a probability-weighted position from 0 to n - 1, so it can be fractional. Snowflake
+documents that probabilities never reach 0 or 1 (a noul stays within about 0.08 to 0.92) and
+defines confidence as (n * p_max - 1) / (n - 1), which the `snowflake-decision` result above
+matches. `snowflake-decision-fast` computes it differently: for the same request it returned a
+topic confidence of 0.975 from a top probability of 0.9975, where that formula gives 0.995, and a
+tone confidence of 0.230 from 0.5617, where it gives 0.343.
 
 Neither engine publishes how its decision model is billed. Databricks' announcement says only
 that `ai_decide` is "faster and lower cost than LLMs on similar tasks", with no figures, and names
@@ -84,38 +115,43 @@ decision models, that returns the engine's raw result, read through `decide_answ
 - `questions` is a compile-time dict keyed by question id. `validate_decide_questions` rejects, at
   execute time: a non-dict or empty set; an id that is not an identifier; a field other than
   `type`, `instructions` and `criteria`; a type other than `noul`, `choice`, `score`; empty
-  instructions; a choice without a label-to-description mapping or over the engine's cap; a score
-  without 2 to 10 levels; noul criteria with keys other than `true` and `false`; a choice label or
-  description, score level or noul description that is not a non-empty string; a repeated score
-  level.
+  instructions; a choice without a label-to-description mapping; a score without 2 to 10 levels;
+  noul criteria with keys other than `true` and `false`; a choice label or description, score
+  level or noul description that is not a non-empty string; a repeated score level. It also
+  rejects anything outside `decide_limits()`, the current engine's documented limits: a choice
+  over or under its label bounds, and on `snowflake-decision` more than 32 questions, more than
+  256 options in all, or an id over 64 characters. A limit an engine does not document is not
+  checked.
 - `decide_questions_json(questions)` serializes the questions as JSON text in declared order:
   question ids as given, each question's fields as `type`, `instructions`, `criteria`, and choice
   labels as given. Scalars and lists go through `tojson`. Both engine paths send it, and hooks size
   `decide` with `log_ai_run('decide', ..., prompt=decide_questions_json(questions))`.
-- The choice cap is `var('decide_choice_cap_databricks', 255)` and
-  `var('decide_choice_cap_snowflake', 32)`, the engines' documented limits, raisable if an engine
-  raises its own. No lower soft threshold is applied.
+- The choice caps are `var('decide_choice_cap_databricks', 255)`,
+  `var('decide_choice_cap_snowflake', 32)` and `var('decide_choice_cap_snowflake_fast', 16)`, the
+  documented limits, raisable if an engine raises its own. No lower soft threshold is applied.
 - `decide_available()` is true on Databricks, true on Snowflake only when
   `var('decide_snowflake_preview')` is true (compared as normalized text), and false everywhere
   else.
-- Where it is false, `decide()` raises at execute time: the platform does not yet offer a decision
-  model this package can call; use `classify()`, which labels from the same fixed set without a
-  confidence. On Snowflake the message adds that an account with preview access can opt in with
-  `decide_snowflake_preview: true`.
+- `var('decide_snowflake_model')` picks the Snowflake model, `snowflake-decision-fast` by default
+  or `snowflake-decision`; any other value raises, since its limits would be unknown.
+- Where `decide_available()` is false, `decide()` raises at execute time: the platform does not
+  yet offer a decision model this package can call; use `classify()`, which labels from the same
+  fixed set without a confidence. On Snowflake the message adds that an enrolled account with
+  `CORTEX_ENABLED_CROSS_REGION = 'ANY_REGION'` can opt in with `decide_snowflake_preview: true`.
 - `databricks__decide` is `ai_decide(<state>, '<decide_questions_json>')`.
-- `snowflake__decide` is `parse_json(to_varchar(ai_complete(model => 'snowflake-decision',
+- `snowflake__decide` is `object_insert(to_object(to_variant(ai_complete(model => '<model>',
   prompt => '{"state": ' || to_json(to_variant(<state>)) || ', "questions": ' ||
-  '<decide_questions_json>' || '}')))`, assembled as text because a Snowflake OBJECT does not keep
-  key order, and marked LIVE-VALIDATION DEFERRED in the macro.
+  '<decide_questions_json>' || '}', return_error_details => true))), 'model', '<model>')`. The
+  request is assembled as text because a Snowflake OBJECT does not keep key order. `to_variant`
+  is needed because `to_varchar` rejects the OBJECT `return_error_details` returns.
 - `decide_answer(decision, question, field, as_type)` reads `choice`, `confidence`,
   `probabilities`, `probabilities.<label>`, `score`, `legend` and `probability`, cast to `as_type`.
   The Databricks branch reads `response.answers.<question>.<field>`; the Snowflake branch reads
-  `answers.<question>.<field>` and maps `probability` to `noul`; the default branch reads the
-  Databricks envelope from a JSON string, which is what the duckdb tier seeds.
-- `decide_error(decision)` returns Databricks' `error_message`. Snowflake reports a failed call as
-  a query error, so its branch returns null.
-- `decide_model(decision)` returns `ai_decide/<metadata.version>` on Databricks and
-  `snowflake-decision` on Snowflake.
+  `value.answers.<question>.<field>` and maps `probability` to `noul`; the default branch reads
+  the Databricks envelope from a JSON string, which is what the duckdb tier seeds.
+- `decide_error(decision)` returns Databricks' `error_message` and Snowflake's `error`.
+- `decide_model(decision)` returns `ai_decide/<metadata.version>` on Databricks and, on Snowflake,
+  the model name `snowflake__decide` stored with the row.
 - `log_ai_run('decide', ..., prompt=decide_questions_json(questions))` counts the questions JSON on every row and
   defaults the output allowance to 0, because a decision model returns typed answers, not
   generated text. With no published billing unit, `decide`'s `est_tokens` and `est_cost` measure
@@ -152,10 +188,30 @@ calls the model once per row, the same split `extract` and `field` already use.
 compiling whether `decide` will run, to choose its method. One macro answers that for `decide`
 and everything built on it, so the two cannot disagree.
 
-**Why Snowflake is written but disabled.** The path is built from Snowflake's announcement, and
-the full syntax sits behind a limited-access page. Our account cannot reach the model. Enabled by
-default, a field-name or envelope mismatch would surface as nulls in a green build. Disabled, no
-one runs it by accident, and an account with preview access opts in knowingly.
+**Why Snowflake is opt-in.** Snowflake Decision is a private preview that needs an enrolled
+account and an account-level parameter, `CORTEX_ENABLED_CROSS_REGION = 'ANY_REGION'`. On by
+default, every other Snowflake account's build would fail at the model check. Off by default, an
+account that has both opts in knowingly, and the vocabulary pipeline uses its `classify`
+fallback everywhere else.
+
+**Why `return_error_details`.** Without it a failed Snowflake row is a bare NULL, which reads
+exactly like a row the model left unanswered, so an invalid request or a content filter would
+pass through a green build as missing answers. With it, `decide_error` carries Snowflake's
+message the way it carries Databricks' `error_message`, and the vocabulary pipeline's `error`
+column means the same thing on both engines.
+
+**Why the Snowflake model name is stored in each row.** Snowflake's result names no model, and the
+two models compute confidence differently, so a confidence threshold calibrated on one does not
+hold for the other. Reading the model name from the var at read time would label rows decided by
+one model with the other's name after a switch. Storing it in the row keeps `decide_model`
+truthful for every row.
+
+**Why `snowflake-decision-fast` is the default.** Snowflake recommends it for most workloads.
+Snowflake documents fewer limits for it, so `validate_decide_questions` checks only its 16-label
+choice cap, and a request over an undocumented limit surfaces as a per-row `decide_error` rather
+than a compile error. A vocabulary over 16 terms, or one that needs every documented limit
+checked, sets `decide_snowflake_model: snowflake-decision`. Both models pass the same live
+battery.
 
 **Why the caps are the engines' documented limits and nothing lower.** TypeSafe reports Jev's
 choice as reliable to about 240 labels. That figure describes a different implementation, and
@@ -196,27 +252,38 @@ functions.
 ## Consequences
 
 - **Confidence is available as a column** on Databricks, and on Snowflake for an account that opts
-  in.
+  in. **It is model-specific:** the two Snowflake models compute it differently, so a vocabulary
+  threshold is calibrated per engine and model.
+- **A failed row is reported, not blank,** on both engines: `decide_error` returns the engine's
+  message.
 - **BigQuery has no `decide`.** The README states the gap, and the vocabulary pipeline's
   `classify` fallback covers fixed-vocabulary labeling there.
 - **The run log cannot record a versioned model id** for `decide`. On Databricks it records the
   function version; the model behind it can change without the log showing it.
-- **A malformed question set fails at compile time,** before any call is billed.
+- **A malformed question set fails at compile time,** before any call is billed, and so does one
+  over an engine's documented limits.
 - **dbt Core and Fusion send the same request** for the same questions; `assert_decide_questions_json`
   checks the exact serialized text on both engines.
 - **CI and the integration tiers cover every branch.** duckdb reads seeded results for every
   question type and the error row, and asserts the unsupported-engine message and each validation
-  message. The cloud tier runs a live choice, noul and score battery on Databricks, gated on
-  `decide_available()`, and asserts the logged `est_tokens` equals the input estimate plus the
-  questions JSON per row with no output allowance.
+  message, including each limit check. The cloud tier runs a live choice, noul and score battery
+  on Databricks and, with the opt-in, on both Snowflake models, gated on `decide_available()`, and
+  asserts the logged `est_tokens` equals the input estimate plus the questions JSON per row with no
+  output allowance. On Snowflake it also sends a request Snowflake rejects and asserts its message
+  reaches `decide_error`.
 
 ## Alternatives considered
 
 - **A decision-model backend behind `classify`.** Rejected: breaks the scalar contract and
   silently changes existing labels.
 - **Normalize inside `decide`.** Rejected: one billed call per extracted field.
-- **Ship Snowflake enabled.** Rejected: unvalidated shape, failure mode is silent nulls.
-- **Omit Snowflake until validated.** Rejected: preview accounts would get nothing.
+- **Ship Snowflake enabled.** Rejected: the preview is access-gated, so accounts without it would
+  fail.
+- **Omit Snowflake.** Rejected: preview accounts would get nothing.
+- **Read Snowflake's bare result and treat NULL as an error.** Rejected: a NULL cannot say why, and
+  `decide_error` would have no message to return.
+- **Default to `snowflake-decision`.** Rejected: Snowflake recommends the fast model for most
+  workloads, and the higher choice cap and fuller limit checks are one var away.
 - **A soft warning below the cap.** Rejected: the only threshold available describes another
   model.
 - **A `meta.ai_decide` entry naming the questions.** Rejected: needs a versioned questions-macro
@@ -232,6 +299,6 @@ functions.
 - **Confidence**: the model's own measure of certainty in a choice or score answer. In the
   Databricks sample above it differs from the top probability.
 - **Envelope**: the wrapper around the answers in a raw result, Databricks' `response`,
-  `metadata` and `error_message`.
+  `metadata` and `error_message`, or Snowflake's `value` and `error` under `return_error_details`.
 - **`decide_available()`**: the macro that says whether `decide` runs on the current target.
 - **Private preview**: a feature an engine offers only to accounts it has enrolled.

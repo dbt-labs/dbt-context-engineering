@@ -123,6 +123,20 @@ dbt build --project-dir integration_tests/cloud --target bigquery --full-refresh
 > non-empty text as "on". A line written to allow AI in prod only would allow it everywhere. A
 > plain `true` does work, but it re-opens the accident this project is avoiding.
 
+**Snowflake Decision (opt-in).** On an account enrolled in the Snowflake Decision preview, with
+`CORTEX_ENABLED_CROSS_REGION = 'ANY_REGION'`, run the Snowflake pass once per Decision model as
+well as once without the opt-in, which covers the `classify` fallback:
+
+```bash
+dbt build --project-dir integration_tests/cloud --target snowflake --full-refresh \
+  --vars '{ai_functions_enabled: true, decide_snowflake_preview: true}'
+dbt build --project-dir integration_tests/cloud --target snowflake --full-refresh \
+  --vars '{ai_functions_enabled: true, decide_snowflake_preview: true, decide_snowflake_model: snowflake-decision}'
+```
+
+`--full-refresh` is required each time, because switching method or model changes what
+`vocab_decided` holds.
+
 There is no CI job for this. The cloud suite runs locally, against your own profile, by following
 §4's cloud pass.
 
@@ -238,8 +252,8 @@ conditionals in `dbt_project.yml`.
 | Groundedness generic test (`grounded`) | `extract_flat` | the `grounded` wrapper itself, `allow_empty: true`. `assert_extract_grounded` alongside it checks the same property by calling the internals directly, so the pair covers both the internals and the wrapper a consumer writes | live |
 | Embedding logic hash as an audit column (ADR-0025) | `embedding_canary` | `assert_embedding_logic_hash_lands` + `not_null` | deterministic |
 | Canary re-bless serializer | `embedding_canary` | `assert_canary_vector_roundtrip`. This is where each engine's own `canary_vector_to_json` is proven to round-trip a real vector, which is what a pasted baseline depends on | live |
-| **Decision models (ADR-0036)** | `decide` (LIVE, Databricks only: enabled where `decide_available()`), `decide_flat` | `assert_decide`, `assert_decide_call_tokens` (both disabled where `decide` is unavailable) | live |
-| **Fixed-vocabulary pipeline (ADR-0037)** | `vocab_stg`, `vocab_reviews`, `vocab_decided` (LIVE: `decide` on Databricks, `classify` fallback on Snowflake and BigQuery via this project's `decide_fallback: classify`), `vocab_labels`, `dim_vocabulary` | `assert_vocab_pipeline` (branches on method), `assert_vocab_call_tokens` (hooks sized from `meta.ai_vocabulary`), `unique` / `relationships` on `vocab_labels` and `dim_vocabulary` | live |
+| **Decision models (ADR-0036)** | `decide` (LIVE: enabled where `decide_available()`, so Databricks always and Snowflake with `decide_snowflake_preview: true`), `decide_flat`; `decide_rejected` (LIVE, Snowflake opt-in only) | `assert_decide`, `assert_decide_call_tokens` (both disabled where `decide` is unavailable); `assert_decide_rejected` | live |
+| **Fixed-vocabulary pipeline (ADR-0037)** | `vocab_stg`, `vocab_reviews`, `vocab_decided` (LIVE: `decide` on Databricks and on Snowflake with the preview opt-in, `classify` fallback on BigQuery and Snowflake without it, via this project's `decide_fallback: classify`), `vocab_labels`, `dim_vocabulary` | `assert_vocab_pipeline` (branches on method), `assert_vocab_call_tokens` (hooks sized from `meta.ai_vocabulary`), `unique` / `relationships` on `vocab_labels` and `dim_vocabulary` | live |
 
 ### 4.1 The multi-run version-guard step
 
@@ -737,15 +751,16 @@ column names the problem (e.g. `wrong_top_hit`, `bad_accuracy`, `extract_null`).
 | `logged_unprompted` warning (duckdb CI step, `--vars '{warn_probe: true}'`) | build passes **and** prints `logs a generate call with no prompt` | No warning → `log_ai_run` does not flag a generative call logged without a prompt, so an input-only `est_tokens` would go unnoticed. The model is disabled in a normal build so the warning never stands. |
 | `assert_decide_answers` (duckdb, no AI call) | 0 rows | `wrong_success_row` → `decide_answer`'s default (JSON) path misread a choice, noul or score field from the Databricks envelope, or a `probabilities.<label>` path. `wrong_error_row` → `decide_error` did not return `error_message`, or a failed row leaked an answer. |
 | `assert_decide_questions_json` (duckdb, compile-time, both engines) | 0 rows | `exact_text` → `decide_questions_json` no longer emits questions, fields and choice labels in declared order, so dbt Core and Fusion would send different requests (Fusion's `tojson` sorts keys). `same_length_as_tojson` / `parses_back` → the serializer changed the escaping or the content, not just the order. |
-| `assert_decide` (LIVE, Databricks only) | 0 rows | `bad_answer` → an `ai_decide` row errored, returned a choice outside the question's labels, a confidence or probability outside 0..1, per-label probabilities not summing to 1, or a score off the 0..2 rubric. Nulls across the board → the `response.answers` path changed. Disabled where `decide_available()` is false. |
-| `assert_decide_call_tokens` (LIVE, Databricks only) | 0 rows | `wrong_est_tokens` → `log_ai_run('decide')` did not add the questions JSON to every row, or applied `max_output_tokens` as an output allowance. `missing_started` → the `decide` post-hook never landed. |
-| `decide` / `vocabulary` negative probes (duckdb CI steps) | **non-zero exit** with the expected message | `probe_decide_unsupported` must name `classify()`; `probe_decide_questions` covers ten malformed question sets; `probe_vocabulary_fallback` must name `decide_fallback: classify` (and, with the fallback set, reach `classify`); `probe_vocabulary_invalid` covers six malformed vocabularies; `probe_vocabulary_no_meta` must say to set `meta.ai_vocabulary`; `probe_vocabulary_skew` (with `vocab_decided_skewed`) must name both vocabulary keys. A different message means a different check fired first. |
+| `assert_decide` (LIVE, Databricks; Snowflake opt-in) | 0 rows | `bad_answer` → a `decide` row errored, returned a choice outside the question's labels, a confidence or probability outside 0..1, per-label probabilities not summing to 1, or a score off the 0..2 rubric. Nulls across the board → the answers path changed (`response.answers` on Databricks, `value.answers` on Snowflake). Disabled where `decide_available()` is false. |
+| `assert_decide_rejected` (LIVE, Snowflake opt-in only) | 0 rows | `error_missing` → a request Snowflake rejects (an unknown question type, which both Decision models reject) did not surface Snowflake's message through `decide_error`, so failed rows would read as unanswered ones; check that `snowflake__decide` still passes `return_error_details => true`. `answer_leaked` → a rejected row returned an answer. `model_missing` → the stored model name is not `decide_snowflake_model`. |
+| `assert_decide_call_tokens` (LIVE, Databricks; Snowflake opt-in) | 0 rows | `wrong_est_tokens` → `log_ai_run('decide')` did not add the questions JSON to every row, or applied `max_output_tokens` as an output allowance. `missing_started` → the `decide` post-hook never landed. |
+| `decide` / `vocabulary` negative probes (duckdb CI steps) | **non-zero exit** with the expected message | `probe_decide_unsupported` must name `classify()`; `probe_decide_questions` covers ten malformed question sets and four over-limit ones (too few labels, too many questions, an over-long id, too many options in all); `probe_vocabulary_fallback` must name `decide_fallback: classify` (and, with the fallback set, reach `classify`); `probe_vocabulary_invalid` covers six malformed vocabularies; `probe_vocabulary_no_meta` must say to set `meta.ai_vocabulary`; `probe_vocabulary_skew` (with `vocab_decided_skewed`) must name both vocabulary keys. A different message means a different check fired first. |
 | `assert_vocab_labels`, `assert_vocab_labels_classify` (duckdb, no AI call) | 0 rows | `mismatch` → routing at the 0.7 threshold, the runner-up (most probable active term other than the choice, ties by label), the out-of-vocabulary rule, or the review join (latest review wins, a reviewed-but-undecided row appears) is wrong. On the classify path, an active term must be `unscored` and reach `final_term`. |
 | `assert_vocab_rendering` (duckdb, compile-time) | 0 rows | The row names the failed check: the `decide` question, `classify` schema enum and prompt must all offer exactly the active terms, with scope notes and synonyms in the descriptions. |
 | `assert_vocab_delta` (duckdb, no AI call) | 0 rows | `reviewed_row_decided` → `vocabulary_delta_predicate` sent a row with an approved review to the model. `wrong_row_count` → the exclusion dropped more or fewer rows than the reviewed ones. |
 | `assert_eval_confidence` (duckdb) | 0 rows | A metric:bucket row → `eval`'s confidence bucketing or per-bucket accuracy/count is off, or an empty bucket emitted a row. |
 | `assert_vocab_call_tokens` (LIVE, all engines) | 0 rows | `wrong_est_tokens` → `vocab_decided`'s hooks, which pass no prompt arguments, did not size the call from `meta.ai_vocabulary` (the decide questions with no output allowance on Databricks; the classify prompt and schema elsewhere), or sized rows other than the ones sent (the reviewed row must be excluded). `missing_started` → the pre-hook never landed. |
-| `assert_vocab_pipeline` (LIVE, all engines) | 0 rows | `reviewed_row_wrong` / `reviewed_row_decided` → the review fixture's utterance was re-decided or its approved term did not win. `contract_decide` (Databricks) → a status, threshold or `final_term` rule broke, or `decision_model` is not `ai_decide/...`. `contract_classify` (Snowflake, BigQuery) → a fallback row carried a confidence or was not `unscored` / `needs_review`. |
+| `assert_vocab_pipeline` (LIVE, all engines) | 0 rows | `reviewed_row_wrong` / `reviewed_row_decided` → the review fixture's utterance was re-decided or its approved term did not win. `contract_decide` (Databricks, Snowflake opt-in) → a status, threshold or `final_term` rule broke, or `decision_model` is not `ai_decide/...` on Databricks or `decide_snowflake_model` on Snowflake. `contract_classify` (BigQuery, Snowflake without the opt-in) → a fallback row carried a confidence or was not `unscored` / `needs_review`. |
 
 > **Snowflake only: a transient null from `generate` and `extract`.**
 >

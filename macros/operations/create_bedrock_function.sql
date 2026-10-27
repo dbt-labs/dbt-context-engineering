@@ -8,7 +8,7 @@
 
     # text model (Converse/UNIFIED) — serves generate, classify, extract, ai_agg:
     dbt run-operation create_bedrock_function --args '{function_name: ce_text,
-        model_id: anthropic.claude-3-5-sonnet-20240620-v1:0, iam_role: arn:aws:iam::<acct>:role/<role>}'
+        model_id: us.anthropic.claude-haiku-4-5-20251001-v1:0, iam_role: arn:aws:iam::<acct>:role/<role>}'
 
     # embedding model (RAW Titan) — serves embed:
     dbt run-operation create_bedrock_function --args '{function_name: ce_embed,
@@ -25,7 +25,9 @@
 
   Args:
     function_name  the inference UDF to create (what the AI wrappers will call).
-    model_id       the Bedrock model id (e.g. 'anthropic.claude-3-5-sonnet-20240620-v1:0').
+    model_id       the Bedrock model id or cross-region inference profile id (e.g.
+                   'us.anthropic.claude-haiku-4-5-20251001-v1:0'; in-region on-demand isn't offered
+                   in some Regions like us-east-2, so a us.*/global.* profile id is required there).
     iam_role       ARN of the Bedrock-enabled role Redshift assumes.
     request_type   'UNIFIED' (default; Converse, message models) or 'RAW' (e.g. Titan embeddings).
     response_type  optional; 'SUPER' to get the raw response object (required for RAW embeddings).

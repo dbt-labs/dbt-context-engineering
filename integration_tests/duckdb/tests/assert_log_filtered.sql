@@ -13,7 +13,7 @@ with logged as (
 expected as (
     select
         count(*) as row_count,
-        coalesce(sum({{ dbt_context_engineering.estimate_tokens('utterance_text') }}), 0) as est_tokens
+        coalesce(sum({{ dbt_context_engineering.estimate_call_tokens('utterance_text', dbt_context_engineering.prompt('EXAMPLE_signal_classify', 'v3'), dbt_context_engineering.schema_def('EXAMPLE_signal_classify', 'v3')) }}), 0) as est_tokens
     from {{ ref('fixture_utterances') }}
     where utterance_id > 5
 )

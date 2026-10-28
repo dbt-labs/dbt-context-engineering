@@ -94,6 +94,29 @@ jobs:
           else
             echo "guard_batch tripped as expected (non-zero exit)"
           fi
+      - name: circuit breaker counts the prompt and output allowance (expect PASS, then FAILURE)
+        # Over the 10-row fixture the input text alone estimates 176, and guard_prompted's prompt,
+        # schema and output_tokens=50 add 200 per row, 2176 in all. A ceiling of 1000 sits between,
+        # so guard_pass (input only) must pass and guard_prompted must trip.
+        run: |
+          dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+            --select guard_pass --vars '{max_est_tokens: 1000}'
+          if dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+               --select guard_prompted --vars '{max_est_tokens: 1000}'; then
+            echo "::error::guard_batch did NOT count the prompt and output allowance"; exit 1
+          else
+            echo "guard_batch tripped on the full per-row estimate as expected (non-zero exit)"
+          fi
+      - name: log_ai_run warns on a generative call with no prompt (expect PASS + warning)
+        # logged_unprompted logs a generate call with no meta.ai_prompt and no prompt=, so its
+        # est_tokens is input-only. The build must succeed and the warning must reach the output.
+        run: |
+          out=$(dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+                  --select logged_unprompted --vars '{warn_probe: true}' 2>&1) || { echo "$out"; exit 1; }
+          echo "$out"
+          if ! echo "$out" | grep -q "logs a generate call with no prompt"; then
+            echo "::error::log_ai_run did NOT warn on a generate call with no prompt"; exit 1
+          fi
       - name: circuit breaker scopes to the incremental delta (expect PASS)
         # guard_batch must count the rows the run ACTUALLY processes, not the whole source. The main
         # build already built guard_delta once (first build: version_guard=True, counts full 10).
@@ -389,10 +412,8 @@ jobs:
       - name: parse (renders wrapper dispatch; no warehouse connection)
         run: dbt parse --project-dir integration_tests/cloud --profiles-dir ci --target ${{ matrix.adapter }}
 
-  # Fusion gate (ADR-0032), duckdb side. Same shape as `deterministic-tests`, on Fusion. Excludes
-  # embedding_canary_baseline and its dependent test: Fusion's duckdb adapter cannot load a
-  # package-owned seed (dbt-core#16128 / dbt-context-engineering#18), a confirmed upstream engine
-  # bug, not a regression in this package's code. Remove the --exclude once that's fixed upstream.
+  # Fusion gate (ADR-0032), duckdb side. Same shape as `deterministic-tests`, on Fusion. Builds the
+  # package-owned embedding_canary_baseline seed too, which requires dbt 2.0.9 or later.
   fusion-deterministic-tests:
     runs-on: ubuntu-latest
     steps:
@@ -409,8 +430,7 @@ jobs:
         run: |
           mkdir -p target
           dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
-            --full-refresh \
-            --exclude embedding_canary_baseline assert_embedding_canary_matches_baseline
+            --full-refresh
 
   # Root-package parse gate: parse THIS package's own dbt_project.yml directly, with none of its
   # null model/embedding vars overridden — the exact experience of a fresh consumer who adds this

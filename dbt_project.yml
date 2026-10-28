@@ -41,6 +41,9 @@ vars:
   # Circuit breaker ceilings (guard_batch, Phase 2). Guards the INPUT relation only.
   max_batch_rows: 10000
   max_est_tokens: 5000000
+  # Per-row output allowance in the estimate (estimate_call_tokens), applied only when the guard
+  # or log is given a prompt. null => fall back to max_output_tokens, then 0.
+  est_output_tokens_per_row: null   # e.g. 200
 
   # Dev-mode row sampling (dev_sample_filter, macros/cost/). null => no sampling, full corpus.
   # A dev-experience convenience keeping a dev/CI run far below the ceilings above, not a
@@ -48,8 +51,8 @@ vars:
   # something any model applies unless it calls dev_sample_filter() itself.
   ai_sample_rows: null      # e.g. 50
 
-  # OUTPUT-side cost control. The guard above only bounds INPUT tokens, so it cannot catch an
-  # output blowup. null => vendor default (nothing emitted).
+  # OUTPUT-side cost control. The guard above can only estimate output before the run, so it
+  # cannot catch an output blowup. null => vendor default (nothing emitted).
   #   max_output_tokens — cross-engine response cap. Snowflake AI_COMPLETE `max_tokens`,
   #     Databricks ai_query `max_tokens`, BigQuery `maxOutputTokens`. Applies to generate on all
   #     three; on Snowflake/Databricks classify & extract expose no cap (bounded by output_schema).

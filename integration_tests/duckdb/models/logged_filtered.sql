@@ -1,5 +1,6 @@
 {{ config(
     materialized='table',
+    meta={'ai_prompt': {'name': 'EXAMPLE_signal_classify', 'version': 'v3'}},
     post_hook=[
         "{{ dbt_context_engineering.log_ai_run('extract', model_name='filter-test', relation=ref('fixture_utterances'), input_column='utterance_text', filter='utterance_id > 5') }}",
         "{{ dbt_context_engineering.complete_ai_run('extract', model_name='filter-test') }}"

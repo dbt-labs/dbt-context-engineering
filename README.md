@@ -245,13 +245,17 @@ Every public object. All are called **package-qualified** (`dbt_context_engineer
 
 #### Cost & audit
 
-**`guard_batch(relation, input_column=none, filter=none)`**: **pre-hook** circuit breaker: counts rows + estimated tokens and **raises before the model runs** if it exceeds `max_batch_rows` / `max_est_tokens`. No AI call ships without one. Pass `filter` on an incremental model so it counts the delta.
+**`guard_batch(relation, input_column=none, filter=none, prompt=none, output_schema=none, output_tokens=none)`**: **pre-hook** circuit breaker: counts rows + estimated tokens and **raises before the model runs** if it exceeds `max_batch_rows` / `max_est_tokens`. No AI call ships without one. Pass `filter` on an incremental model so it counts the delta. For `generate` / `classify` / `extract`, name the prompt once in the model's `meta.ai_prompt` (see `config_prompt`) and the guard reads it, so the estimate counts the prompt template and an output allowance on every row and not only the input text. Explicit `prompt` / `output_schema` arguments override it.
 
-**`estimate_tokens(text_expression)`**: a SQL expression estimating tokens (`ceil(len/4)`), no AI. Shared by the guard and the log.
+**`estimate_tokens(text_expression)`**: a SQL expression estimating tokens (`ceil(len/4)`), no AI.
+
+**`estimate_call_tokens(input_column=none, prompt=none, output_schema=none, output_tokens=none)`**: the per-row estimate the guard and the log share. Input text, plus the prompt template and schema when `prompt` is passed, plus an output allowance from `output_tokens`, then `var('est_output_tokens_per_row')`, then `var('max_output_tokens')`. Without a prompt it is input-only, which is accurate for `embed`.
+
+**`config_prompt()` / `config_schema()`**: the prompt and schema named by the model's `config(meta={'ai_prompt': {'name': ..., 'version': ...}})`, resolved through `prompt()` / `schema_def()`. Pass them to the AI function in the body; `guard_batch` and `log_ai_run` read the same `meta`, so a model names its prompt once. They raise when `meta.ai_prompt` is missing.
 
 **`dev_sample_filter(row_limit=none)`**: a portable `qualify row_number() … <= n` clause that caps a model to a random `row_limit` rows (or `var('ai_sample_rows')` if unset). Append it to a model's final `select` while iterating, so nothing is metered or billed against the full corpus by accident.
 
-**`log_ai_run(function_name, model_name=none, relation=none, input_column=none, filter=none)`**: pre- or post-hook (see [ADR-0022](adr/0022-log-ai-run-hook-phase-follows-what-this-means.md) for which one); appends a `'started'` row to `ai_run_log` with the batch's sizing (row count, estimated tokens/cost) and the dbt node's `unique_id` in `node_id`. Node IDs match the `node_id` stamped in dbt platform query comments, so log rows can be joined to warehouse usage history. The consumer's `create_ai_run_log_table()` on-run-start hook bootstraps the table and adds `node_id` to existing tables.
+**`log_ai_run(function_name, model_name=none, relation=none, input_column=none, filter=none, prompt=none, output_schema=none, output_tokens=none)`**: pre- or post-hook (see [ADR-0022](adr/0022-log-ai-run-hook-phase-follows-what-this-means.md) for which one); appends a `'started'` row to `ai_run_log` with the batch's sizing (row count, estimated tokens/cost, sized like `guard_batch`; logging a `generate` / `classify` / `extract` call with no prompt from either source emits a warning naming the model) and the dbt node's `unique_id` in `node_id`. Node IDs match the `node_id` stamped in dbt platform query comments, so log rows can be joined to warehouse usage history. The consumer's `create_ai_run_log_table()` on-run-start hook bootstraps the table and adds `node_id` to existing tables.
 
 **`complete_ai_run(function_name, model_name=none)`**: always safe as a post-hook; appends a **separate** `'completed'` row (never an `UPDATE`) once the model finishes, matched back to its `'started'` row on `invocation_id`/`function_name`/`model_name`/`node_id`. Completion rows can now also be matched on `node_id`, which distinguishes different dbt models making the same AI call. Event-sourced rather than a boolean flip, so two concurrent runs never contend for the same row ([ADR-0031](adr/0031-run-completion-as-an-event-sourced-append.md)).
 
@@ -337,10 +341,10 @@ All divergent prerequisites are `vars` (see `dbt_project.yml`), visible and docu
 ```
 macros/
   functions/               # generate/classify/extract/embed (adapter.dispatch) + prereq checks
-  prompts/                 # prompt / schema_def (macro-library loader, ADR-0001) + render_prompt
+  prompts/                 # prompt / schema_def (macro-library loader, ADR-0001) + render_prompt + config_prompt / config_schema
   chunking/                # chunk (unit packing, incremental-aware) + split_sentences + no_oversized_chunks + array_agg/string_agg
   metadata/                # attach_metadata (join source-level metadata onto chunks)
-  cost/                    # guard_batch / estimate_tokens / dev_sample_filter / log_ai_run / complete_ai_run
+  cost/                    # guard_batch / estimate_tokens / estimate_call_tokens / dev_sample_filter / log_ai_run / complete_ai_run
   audit/                   # ai_run_log_schema / create_ai_run_log_table
   incremental/             # version_guard / incremental_delta_predicate / row_value_not_in
   embedding/               # content_hash / embedding_dimension / embedding_fn_fingerprint / embedding_logic_hash

@@ -5,7 +5,7 @@ diverges from the three built-in-AI engines: AI runs through Bedrock **inference
 `CREATE EXTERNAL MODEL` (not inline functions), structured output is **best-effort** (prompt-enforced,
 no `response_format`), vector search is a **pure-SQL cosine over `SUPER` arrays**, and the
 `embedding_canary` monitor + `create_vector_index` are **unsupported** (they need a scalar cosine /
-an in-database vector index Redshift lacks). See [ADR-0035](../../adr/0035-redshift-support-bedrock-external-models.md).
+an in-database vector index Redshift lacks). See [ADR-0036](../../adr/0036-redshift-support-bedrock-external-models.md).
 
 It mirrors the cloud project's model/test set (chunk, embed, search, generate, classify, extract,
 ai_agg, attach_metadata, knowledge_base, evaluation, and the multi-run delta paths) so the Redshift

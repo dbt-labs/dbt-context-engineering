@@ -16,19 +16,29 @@
   A none/empty filter counts the full relation (correct on first build, --full-refresh, and
   version bumps, where the whole corpus is (re)processed).
 
+  For generate/classify/extract the estimate also counts the prompt template, the schema and an
+  output allowance per row (estimate_call_tokens). The prompt and schema come from the model's
+  meta.ai_prompt, the same one config_prompt()/config_schema() hand the body, or from explicit
+  `prompt` / `output_schema` arguments. Without either, max_est_tokens measures input text only, a
+  ceiling several times looser than configured for those functions. embed needs neither.
+
   Usage (simple):
     {{ config(pre_hook = "{{ guard_batch(ref('my_inputs'), 'text_col') }}") }}
+  Usage (generate/classify/extract, prompt named once in meta):
+    {{ config(meta={'ai_prompt': {'name': 'my_prompt', 'version': 'v1'}},
+              pre_hook = "{{ guard_batch(ref('my_inputs'), 'text_col') }}") }}
   Usage (incremental — guard the delta, not the corpus):
     {{ config(pre_hook = "{{ guard_batch(ref('my_inputs'), 'text_col',
          filter=(none if not is_incremental() else 'id not in (select id from ' ~ this ~ ')')) }}") }}
 -#}
-{% macro guard_batch(relation, input_column=none, filter=none) -%}
+{% macro guard_batch(relation, input_column=none, filter=none, prompt=none, output_schema=none, output_tokens=none) -%}
     {#- Only executes against the warehouse at run time; a no-op during parse. -#}
     {%- if not execute -%}{{ return('') }}{%- endif -%}
 
     {%- set max_rows = var('max_batch_rows', 10000) -%}
     {%- set max_tokens = var('max_est_tokens', 5000000) -%}
-    {%- set tok_expr = dbt_context_engineering.estimate_tokens(input_column) if input_column is not none else '0' -%}
+    {%- set call = dbt_context_engineering.resolve_call_prompt(prompt, output_schema) -%}
+    {%- set tok_expr = dbt_context_engineering.estimate_call_tokens(input_column, call[0], call[1], output_tokens) -%}
 
     {%- set q -%}
         select

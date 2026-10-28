@@ -101,7 +101,7 @@ the complete catalogue.
 ```yaml
 vars:
   max_batch_rows: 10000          # guard_batch circuit-breaker ceiling (input rows)
-  max_est_tokens: 5000000        # guard_batch ceiling (input tokens)
+  max_est_tokens: 5000000        # guard_batch ceiling (estimated tokens)
   max_output_tokens: null        # cross-engine response cap (also curbs Gemini output)
   cost_per_1k_tokens: null       # set to populate est_cost in the run log
   ai_run_log_relation: null      # where the append-only ai_run_log is written

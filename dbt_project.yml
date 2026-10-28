@@ -27,7 +27,7 @@ vars:
   # Default model per function (override per call at the wrapper).
   # Model choice is the single largest cost lever — always explicit, always logged.
   # REDSHIFT: these name the Bedrock inference FUNCTION (UDF) created by create_bedrock_function,
-  # NOT a model string — the model id lives inside the external-model object (see ADR-0035).
+  # NOT a model string — the model id lives inside the external-model object (see ADR-0036).
   model_generate: null      # e.g. snowflake: 'claude-3-5-sonnet'; redshift: 'ce_text' (a UDF)
   model_classify: null      # falls back to model_generate
   model_extract: null       # falls back to model_generate
@@ -44,6 +44,9 @@ vars:
   # Circuit breaker ceilings (guard_batch, Phase 2). Guards the INPUT relation only.
   max_batch_rows: 10000
   max_est_tokens: 5000000
+  # Per-row output allowance in the estimate (estimate_call_tokens), applied only when the guard
+  # or log is given a prompt. null => fall back to max_output_tokens, then 0.
+  est_output_tokens_per_row: null   # e.g. 200
 
   # Dev-mode row sampling (dev_sample_filter, macros/cost/). null => no sampling, full corpus.
   # A dev-experience convenience keeping a dev/CI run far below the ceilings above, not a
@@ -51,8 +54,8 @@ vars:
   # something any model applies unless it calls dev_sample_filter() itself.
   ai_sample_rows: null      # e.g. 50
 
-  # OUTPUT-side cost control. The guard above only bounds INPUT tokens, so it cannot catch an
-  # output blowup. null => vendor default (nothing emitted).
+  # OUTPUT-side cost control. The guard above can only estimate output before the run, so it
+  # cannot catch an output blowup. null => vendor default (nothing emitted).
   #   max_output_tokens — cross-engine response cap. Snowflake AI_COMPLETE `max_tokens`,
   #     Databricks ai_query `max_tokens`, BigQuery `maxOutputTokens`, Redshift UNIFIED `maxTokens`
   #     (camelCase, case-sensitive). Applies to generate on all engines; on Snowflake/Databricks
@@ -74,7 +77,7 @@ vars:
   # REDSHIFT provisioning (no var — a run-operation setup step, like bq_connection above).
   # Redshift has no built-in inline AI function: create the Bedrock inference UDFs ONCE, then point
   # model_generate/embedding_model at them. See create_bedrock_function (macros/operations/) and
-  # ADR-0035 / integration_tests/redshift/README.md:
+  # ADR-0036 / integration_tests/redshift/README.md:
   #   dbt run-operation create_bedrock_function --args '{function_name: ce_text,
   #     model_id: us.anthropic.claude-haiku-4-5-20251001-v1:0, iam_role: default}'   # UNIFIED text
   #   dbt run-operation create_bedrock_function --args '{function_name: ce_embed,
@@ -96,7 +99,7 @@ vars:
   ai_functions_enabled: false
 
   # embedding_canary (runtime drift monitor, ADR-0026). NOT supported on Redshift — it needs a
-  # scalar cosine Redshift lacks, so the dispatched macro raises there (ADR-0035); leave monitoring
+  # scalar cosine Redshift lacks, so the dispatched macro raises there (ADR-0036); leave monitoring
   # disabled on Redshift. Minimum cosine similarity a live probe
   # must retain against its blessed baseline. The same measure vector_search already uses to rank
   # results (ADR-0005): a threshold here means "would this difference change a search result,"

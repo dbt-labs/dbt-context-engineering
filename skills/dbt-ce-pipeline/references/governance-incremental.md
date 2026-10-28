@@ -11,7 +11,7 @@ rule and you should too: **no AI call ships without a cost guard.**
 instead of billing you.
 
 ```
-guard_batch(relation, input_column=none, filter=none)
+guard_batch(relation, input_column=none, filter=none, prompt=none, output_schema=none, output_tokens=none)
 ```
 
 Wire it as a `pre_hook`. Ceilings are vars: `max_batch_rows` (default 10000),
@@ -27,7 +27,28 @@ the whole corpus).
 ) }}
 ```
 
-`guard_batch` bounds **input** tokens only. To cap output, set `var: max_output_tokens`
+For `generate` / `classify` / `extract`, name the prompt once in the model's `meta.ai_prompt`.
+Those functions send the prompt template and schema with every row and are billed for output
+too, so an input-only estimate runs several times low (about 6x on a measured Snowflake extract).
+`guard_batch` and `log_ai_run` read `meta.ai_prompt` and add the template and schema per row plus
+an output allowance (`output_tokens`, else `var: est_output_tokens_per_row`, else
+`var: max_output_tokens`). The body passes `config_prompt()` / `config_schema()` to the AI
+function, so the prompt is named in one place. `log_ai_run` warns, naming the model, when it logs
+one of these functions with no prompt.
+
+```sql
+{{ config(
+    meta={'ai_prompt': {'name': 'my_prompt', 'version': 'v1'}},
+    pre_hook="{{ dbt_context_engineering.guard_batch(ref('stg'), 'text') }}",
+    post_hook="{{ dbt_context_engineering.log_ai_run('extract', relation=ref('stg'), input_column='text') }}"
+) }}
+select id, {{ dbt_context_engineering.extract('text',
+    dbt_context_engineering.config_prompt(),
+    dbt_context_engineering.config_schema()) }} as extracted
+from {{ ref('stg') }}
+```
+
+The guard can only *estimate* output before the run. To cap output, set `var: max_output_tokens`
 (and on BigQuery/Gemini, `var: bq_thinking_budget: 0` for structured tasks, since Gemini
 bills its default "thinking" as output tokens). See the `dbt-ce-setup` skill for those.
 

@@ -17,7 +17,7 @@ just record the choice.
 | [0000](0000-record-architecture-decisions.md) | Record architecture decisions | Accepted |
 | [0001](0001-prompts-and-schemas-as-versioned-macros.md) | Prompts and schemas as versioned Jinja macros | Superseded by 0032 (partial) |
 | [0002](0002-chunking-as-token-bounded-unit-packing.md) | Chunking as token-bounded unit packing | Accepted |
-| [0003](0003-cost-as-a-first-class-output.md) | Cost as a first-class output: guard + run log | Accepted |
+| [0003](0003-cost-as-a-first-class-output.md) | Cost as a first-class output: guard + run log | Superseded by 0035 (partial) |
 | [0004](0004-version-aware-incremental-refresh.md) | Version-aware incremental refresh, no custom materialization | Accepted |
 | [0005](0005-retrieval-brute-force-default-index-opt-in.md) | Retrieval: brute-force default, managed index opt-in | Accepted |
 | [0006](0006-knowledge-base-union-to-common-shape.md) | Knowledge base: union sources into a common shape | Accepted |
@@ -46,7 +46,8 @@ just record the choice.
 | [0032](0032-dbt-version-floor-and-fusion-support.md) | Raising the dbt version floor and declaring Fusion support | Accepted |
 | [0033](0033-ai-run-log-node-identity.md) | Record the dbt node identity in `ai_run_log` | Accepted |
 | [0034](0034-run-log-target-ownership-under-deferral.md) | Keep the AI run log in the current target under state deferral | Accepted |
-| [0035](0035-redshift-support-bedrock-external-models.md) | Redshift support: Bedrock inference UDFs, best-effort structured output, pure-SQL cosine | Accepted |
+| [0035](0035-per-call-token-estimate-for-the-guard-and-the-log.md) | Estimate the whole AI call per row, with the prompt named once in model meta | Accepted |
+| [0036](0036-redshift-support-bedrock-external-models.md) | Redshift support: Bedrock inference UDFs, best-effort structured output, pure-SQL cosine | Accepted |
 
 ## New here? A reading path
 
@@ -73,6 +74,7 @@ of the discipline.
    - [0027](0027-classification-as-a-second-privileged-knowledge-base-column.md), asking 0014's promote-or-stay-generic question for a third kind of field (the derived label), the first time it's answered "promote" since citation_url
 4. **Making it affordable, correct, and trustworthy** — the governance that makes it production-grade.
    - [0003](0003-cost-as-a-first-class-output.md) — cost (the token economy, guard + log)
+   - [0035](0035-per-call-token-estimate-for-the-guard-and-the-log.md), sizing the whole AI call per row, prompt and output included, not only 0003's input text
    - [0004](0004-version-aware-incremental-refresh.md) — version-aware incremental refresh
    - [0023](0023-embedding-metadata-and-content-hash-delta.md), embedding metadata as a cache key, and the content-hash delta 0004's version check alone can't see
    - [0024](0024-inline-embedding-storage-over-a-side-table.md), inline vs. side-table vector storage

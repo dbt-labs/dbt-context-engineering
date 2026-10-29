@@ -26,11 +26,14 @@ clean-targets:
 vars:
   # Default model per function (override per call at the wrapper).
   # Model choice is the single largest cost lever — always explicit, always logged.
-  model_generate: null      # e.g. snowflake: 'claude-3-5-sonnet'; set per adapter/project
-  model_classify: null
-  model_extract: null
+  # REDSHIFT: these name the Bedrock inference FUNCTION (UDF) created by create_bedrock_function,
+  # NOT a model string — the model id lives inside the external-model object (see ADR-0036).
+  model_generate: null      # e.g. snowflake: 'claude-3-5-sonnet'; redshift: 'ce_text' (a UDF)
+  model_classify: null      # falls back to model_generate
+  model_extract: null       # falls back to model_generate
 
   # Embeddings — pinned. A corpus embedded by one model cannot be searched by another.
+  # REDSHIFT: the embedding UDF name (e.g. 'ce_embed'), not a model string (see model_* above).
   embedding_model: null
 
   # Chunking (chunk, Phase 1). Token heuristic is ceil(char_length/4); no AI call.
@@ -54,8 +57,9 @@ vars:
   # OUTPUT-side cost control. The guard above can only estimate output before the run, so it
   # cannot catch an output blowup. null => vendor default (nothing emitted).
   #   max_output_tokens — cross-engine response cap. Snowflake AI_COMPLETE `max_tokens`,
-  #     Databricks ai_query `max_tokens`, BigQuery `maxOutputTokens`. Applies to generate on all
-  #     three; on Snowflake/Databricks classify & extract expose no cap (bounded by output_schema).
+  #     Databricks ai_query `max_tokens`, BigQuery `maxOutputTokens`, Redshift UNIFIED `maxTokens`
+  #     (camelCase, case-sensitive). Applies to generate on all engines; on Snowflake/Databricks
+  #     classify & extract expose no cap (bounded by output_schema).
   #   bq_thinking_budget — BigQuery/Gemini ONLY. Gemini 2.5 runs DYNAMIC THINKING ON BY DEFAULT
   #     and bills thinking as OUTPUT tokens; set 0 for structured tasks to stop paying for it.
   max_output_tokens: null      # e.g. 1024
@@ -70,6 +74,18 @@ vars:
   bq_connection: null       # e.g. 'us.my_vertex_connection'
   bq_model: null            # e.g. 'my_dataset.my_remote_model'
 
+  # REDSHIFT provisioning (no var — a run-operation setup step, like bq_connection above).
+  # Redshift has no built-in inline AI function: create the Bedrock inference UDFs ONCE, then point
+  # model_generate/embedding_model at them. See create_bedrock_function (macros/operations/) and
+  # ADR-0036 / integration_tests/redshift/README.md:
+  #   dbt run-operation create_bedrock_function --args '{function_name: ce_text,
+  #     model_id: us.anthropic.claude-haiku-4-5-20251001-v1:0, iam_role: default}'   # UNIFIED text
+  #   dbt run-operation create_bedrock_function --args '{function_name: ce_embed,
+  #     model_id: amazon.titan-embed-text-v2:0, iam_role: default,
+  #     request_type: RAW, response_type: SUPER}'                                     # embeddings
+  # Prereqs: GRANT CREATE MODEL to the user; the IAM role needs bedrock:InvokeModel; model access
+  # enabled in the Bedrock console; in us-east-2 use a cross-region inference profile (us.* id).
+
   # Where the append-only AI run log is written (Phase 3).
   ai_run_log_relation: null
 
@@ -82,7 +98,9 @@ vars:
   # invocation, not whether an AI call is safe to make.
   ai_functions_enabled: false
 
-  # embedding_canary (runtime drift monitor, ADR-0026). Minimum cosine similarity a live probe
+  # embedding_canary (runtime drift monitor, ADR-0026). NOT supported on Redshift — it needs a
+  # scalar cosine Redshift lacks, so the dispatched macro raises there (ADR-0036); leave monitoring
+  # disabled on Redshift. Minimum cosine similarity a live probe
   # must retain against its blessed baseline. The same measure vector_search already uses to rank
   # results (ADR-0005): a threshold here means "would this difference change a search result,"
   # not an arbitrary count of float decimal places. Live measurement found the same probe embedded

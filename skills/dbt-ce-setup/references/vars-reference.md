@@ -12,6 +12,10 @@ Every configuration `var` the package reads, its default, and what it controls. 
 | `model_classify` | `null` | model for `classify()`. |
 | `model_extract` | `null` | model for `extract()` (falls back to `model_generate`). |
 
+> **On Redshift these name a Bedrock inference UDF, not a model string** (e.g. `model_generate: ce_text`,
+> `embedding_model: ce_embed`) — the model id lives inside the external-model object the UDF wraps.
+> Provision the UDFs with `create_bedrock_function` first (see `references/adapter-config.md`).
+
 ## Spend safety
 
 | var | default | controls |
@@ -30,7 +34,7 @@ Every configuration `var` the package reads, its default, and what it controls. 
 
 | var | default | controls |
 |---|---|---|
-| `max_output_tokens` | `null` | cross-engine response cap (Snowflake `AI_COMPLETE max_tokens`, Databricks `ai_query max_tokens`, BigQuery `maxOutputTokens`). Applies to `generate` on all three. |
+| `max_output_tokens` | `null` | cross-engine response cap (Snowflake `AI_COMPLETE max_tokens`, Databricks `ai_query max_tokens`, BigQuery `maxOutputTokens`, Redshift UNIFIED `maxTokens`). Applies to `generate` on every engine. |
 | `bq_thinking_budget` | `null` | **BigQuery/Gemini only.** `0` disables Gemini's default thinking (billed as output tokens); `null` = model default. |
 
 ## Logging
@@ -58,7 +62,9 @@ Every configuration `var` the package reads, its default, and what it controls. 
 
 Off by default. To enable, set `monitoring: +enabled: true` (models) and
 `seeds: dbt_context_engineering: +enabled: true`, then wire the canary into a **scheduled prod
-job** (it makes real, billed `embed()` calls every build).
+job** (it makes real, billed `embed()` calls every build). **Not supported on Redshift** — the
+canary needs a scalar cosine Redshift lacks, so the dispatched macro raises with guidance; leave
+`monitoring` disabled on Redshift targets.
 
 | var | default | controls |
 |---|---|---|

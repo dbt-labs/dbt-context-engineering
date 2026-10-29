@@ -64,9 +64,10 @@ rather than plain text. Read plain text back with `text()`, structured fields wi
 ### ai_agg — one answer per group
 
 `ai_agg` runs over a `GROUP BY` and reasons across all rows in each group. Its `prompt` is a
-**plain instruction string, not a template** (no `{{ input }}` placeholder). On Databricks it
-has no internal map-reduce, so guard each group with `guard_agg_batch` (see `dbt-ce-setup`'s
-`max_agg_group_tokens`).
+**plain instruction string, not a template** (no `{{ input }}` placeholder). On Databricks **and
+Redshift** it has no internal map-reduce (the group is collapsed with a SQL aggregate, then one
+model call), so guard each group with `guard_agg_batch` (see `dbt-ce-setup`'s
+`max_agg_group_tokens`); on Redshift the `LISTAGG` collapse also has a hard 64KB per-group cap.
 
 ## Authoring prompts & schemas (this lives in YOUR project)
 
@@ -80,7 +81,8 @@ essentials:
   with a `{{ input }}` placeholder where the row's value goes.
 - A schema version is a macro named **`schema__<name>__<version>()`** returning a JSON-schema
   string. Its `enum` is the **single source of truth** for the label set. It drives classify,
-  the `conforms_to_schema` test, and (on BigQuery) automatic prompt-injected enum enforcement.
+  the `conforms_to_schema` test, and (on BigQuery and Redshift) automatic prompt-injected enum
+  enforcement — on Redshift all structured output is best-effort/prompt-enforced (no native schema).
 - Resolve them with `prompt('name','version')` and `schema_def('name','version')`. **Versions
   are explicit and required, there is no implicit "latest".**
 

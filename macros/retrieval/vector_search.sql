@@ -80,3 +80,53 @@ limit {{ top_k }}
         resolved inside it; this orders the returned set deterministically. -#}
     order by score desc{% if id_column is not none %}, base.{{ id_column }}{% endif %}
 {%- endmacro %}
+
+
+{% macro redshift__vector_search(relation, embedding_column, query_embedding, top_k, id_column, select_columns, filter) -%}
+    {#- Redshift has NO native vector type and NO scalar cosine (unlike Snowflake/Databricks'
+        vector_cosine_similarity or BigQuery's VECTOR_SEARCH), and Python UDFs — the obvious home for a
+        scalar cosine — reach end-of-support 2026-06-30. So cosine is computed in PURE SQL: embeddings
+        are SUPER arrays, so unnest each candidate vector AND the query vector to (index, value) rows
+        (PartiQL `... AS e AT i`), join on index, and aggregate dot / ‖cand‖ / ‖query‖ per candidate.
+        This is the brute-force default (ADR-0005), O(n · dim) with no index; the external-index path
+        is out of scope on Redshift (see create_vector_index). LIVE-VALIDATION DEFERRED.
+
+        query_embedding MUST be a SUPER array so it can be unnested — an embed(...) call (returns the
+        .embedding SUPER) or json_parse('[...]') for a literal. A synthetic _ce_rid keys the aggregation
+        so GROUP BY never touches the SUPER column and never depends on id_column being supplied. -#}
+with _ce_candidates as (
+    select
+        row_number() over (order by 1) as _ce_rid,
+        {% if id_column is not none %}{{ id_column }},{% endif %}
+        {% if select_columns %}{% for c in select_columns %}{{ c }},{% endfor %}{% endif %}
+        {{ embedding_column }} as _ce_vec
+    from {{ relation }}
+    {% if filter is not none %}where {{ filter }}{% endif %}
+),
+_ce_cand_elems as (
+    select c._ce_rid, i as _ce_idx, cast(e as float8) as _ce_cval
+    from _ce_candidates c, c._ce_vec as e at i
+),
+_ce_query_elems as (
+    select qi as _ce_idx, cast(qe as float8) as _ce_qval
+    from (select {{ query_embedding }} as _ce_q) _ceq, _ceq._ce_q as qe at qi
+),
+_ce_scored as (
+    select
+        ce._ce_rid,
+        sum(ce._ce_cval * qel._ce_qval)
+            / nullif(sqrt(sum(ce._ce_cval * ce._ce_cval)) * sqrt(sum(qel._ce_qval * qel._ce_qval)), 0) as score
+    from _ce_cand_elems ce
+    join _ce_query_elems qel on ce._ce_idx = qel._ce_idx
+    group by ce._ce_rid
+)
+select
+    {% if id_column is not none %}c.{{ id_column }},{% endif %}
+    {% if select_columns %}{% for c in select_columns %}c.{{ c }},{% endfor %}{% endif %}
+    s.score as score
+from _ce_scored s
+join _ce_candidates c on c._ce_rid = s._ce_rid
+{# secondary sort on id_column so rows tied at the top_k cutoff are stable, matching the scalar engines #}
+order by score desc{% if id_column is not none %}, c.{{ id_column }}{% endif %}
+limit {{ top_k }}
+{%- endmacro %}

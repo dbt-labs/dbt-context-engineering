@@ -27,3 +27,18 @@
 {% macro databricks__array_agg(expr, order_expr) -%}
     transform(array_sort(collect_list(struct({{ order_expr }} as _o, {{ expr }} as _v))), x -> x._v)
 {%- endmacro %}
+
+{#- Redshift has NO ARRAY_AGG and no group-level array constructor, so build the ordered array as a
+    SUPER value: LISTAGG the JSON-encoded, ORDER-BY-sequenced elements into a '[...]' string and
+    JSON_PARSE it. Elements are emitted as JSON STRINGS (every engine else keeps the id's native
+    type) — a documented, acceptable divergence for source_rows, which is lineage over identifiers;
+    chunk itself already casts ids to string for chunk_id. Quote/escape via chr() (34='"', 92='\')
+    so no backslash/quote string literal appears here — side-stepping the standard_conforming_strings
+    ambiguity str_literal otherwise rides on. LISTAGG's 64KB per-group cap applies (source_rows is
+    one entry per unit in a chunk — small). -#}
+{% macro redshift__array_agg(expr, order_expr) -%}
+    json_parse('[' || listagg(
+        chr(34) || replace(replace(cast({{ expr }} as varchar), chr(92), chr(92) || chr(92)), chr(34), chr(92) || chr(34)) || chr(34),
+        ','
+    ) within group (order by {{ order_expr }}) || ']')
+{%- endmacro %}

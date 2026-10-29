@@ -34,15 +34,15 @@ jobs:
         run: python ci/test_macro_call_graph.py
 
   # Structure-only gate (ADR-0015): parse the single cloud integration-test project across
-  # all three targets. `dbt parse` renders the wrapper dispatch (bigquery__/snowflake__/databricks__
-  # impls) and validates refs/macros/config WITHOUT opening a warehouse connection — so no
+  # all four targets. `dbt parse` renders the wrapper dispatch (bigquery__/snowflake__/databricks__/
+  # redshift__ impls) and validates refs/macros/config WITHOUT opening a warehouse connection — so no
   # credentials are needed. (compile is NOT used here: it connects at startup on every cloud adapter.)
   structure:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        adapter: [snowflake, databricks, bigquery]
+        adapter: [snowflake, databricks, bigquery, redshift]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262     # actions/checkout@v4
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # actions/setup-python@v5
@@ -54,6 +54,14 @@ jobs:
         run: dbt deps --project-dir integration_tests/cloud --profiles-dir ci
       - name: parse (renders wrapper dispatch; no warehouse connection)
         run: dbt parse --project-dir integration_tests/cloud --profiles-dir ci --target ${{ matrix.adapter }}
+      # The Redshift-specific live-battery project (integration_tests/redshift) is parse-checked only
+      # on the redshift leg — it exists to be run live against Redshift+Bedrock, but parsing it here
+      # keeps its models/tests/dispatch from drifting. Connection-free, same as above.
+      - name: parse redshift integration project (redshift only)
+        if: matrix.adapter == 'redshift'
+        run: |
+          dbt deps --project-dir integration_tests/redshift --profiles-dir ci
+          dbt parse --project-dir integration_tests/redshift --profiles-dir ci --target redshift
 
   # Deterministic tests (chunking, guard, log) — executed on duckdb, no warehouse credentials
   # needed (ADR-0015). This is the only job that truly compiles + runs + tests models.
@@ -357,7 +365,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        adapter: [snowflake, databricks, bigquery]
+        adapter: [snowflake, databricks, bigquery, redshift]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262     # actions/checkout@v4
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # actions/setup-python@v5
@@ -399,7 +407,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        adapter: [snowflake, databricks, bigquery]
+        adapter: [snowflake, databricks, bigquery, redshift]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262     # actions/checkout@v4
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # actions/setup-python@v5

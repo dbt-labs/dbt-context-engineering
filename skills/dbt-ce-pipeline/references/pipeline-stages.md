@@ -10,9 +10,11 @@ split_sentences(relation, id_column, text_column)
 ```
 
 One row per sentence. Naive `[.!?]` boundaries, identical on every engine (deterministic,
-no AI). Output columns: `sentence_id, document_id, sentence_index, sentence_text`. Use it
-to produce the per-unit input `chunk` expects, though any table with an id + order + text
-works.
+no AI) — the boundary rule is reproduced per-dialect (e.g. **Redshift** uses a PCRE lookaround
+sentinel since it has no `regexp_extract_all` and no replacement backreferences), so a corpus
+splits the same everywhere. Output columns: `sentence_id, document_id, sentence_index,
+sentence_text`. Use it to produce the per-unit input `chunk` expects, though any table with an
+id + order + text works.
 
 ## chunk
 
@@ -73,9 +75,13 @@ embed(input_column, model=none)
 Row-level embedding of a text column into a vector. `model` defaults to
 `var('embedding_model')` and is **pinned** — the whole corpus and every query must use the
 same model. Native functions: Snowflake `AI_EMBED`, Databricks `ai_query`, BigQuery
-`AI.EMBED`; no DuckDB implementation. Requires `var: ai_functions_enabled = true`.
-Materialize as `incremental` for production data (`table` only for a test/example, since it
-re-embeds the whole corpus every run), never `view`.
+`AI.EMBED`; no DuckDB implementation. On **Redshift** there is no inline function — `model` /
+`var: embedding_model` is the name of a Bedrock embedding **UDF** you provision once with
+`create_bedrock_function` (RAW, `amazon.titan-embed-text-v2:0`); it returns a `SUPER` array (the
+package pulls `.embedding` out via a parser-safe `json_serialize`/`json_extract_path_text`/
+`json_parse` chain). Requires `var: ai_functions_enabled = true`. Materialize as `incremental`
+for production data (`table` only for a test/example, since it re-embeds the whole corpus every
+run), never `view`.
 
 ## knowledge_base
 
@@ -110,8 +116,11 @@ string applied before ranking (e.g. restrict to a classification before searchin
 Returns `[id_column, select_columns..., score]`, ordered by score descending, tie-broken
 on `id_column`. Per-engine scoring differs internally (e.g. BigQuery ranks by
 `1 - distance`) but the returned `score` is a cosine similarity on every engine.
-`LIVE-VALIDATION DEFERRED` on cloud engines. The brute-force default is validated on
-DuckDB.
+`LIVE-VALIDATION DEFERRED` on the Snowflake/Databricks/BigQuery engines; the brute-force default
+is validated on DuckDB and live on **Redshift**. On **Redshift** there is no native vector type or
+scalar cosine, so the cosine is computed in pure SQL by unnesting the `SUPER` arrays (`... AS e AT i`)
+and aggregating — which means `query_embedding` **must be a `SUPER` array** (an `embed(...)` call,
+or `json_parse('[...]')` for a literal), not a bare bracket list.
 
 ### Managed index (opt-in, `dbt run-operation` only — never a model)
 
@@ -124,7 +133,9 @@ create_vector_index(name, relation, column, attributes=[], warehouse=none,
 Builds the engine's external, **separately-billed** index (Snowflake Cortex Search,
 BigQuery vector index, Databricks Vector Search). It is stateful with idle-serving cost,
 create it deliberately and drop it explicitly when done. Run it as an operation, not as
-part of a model build. NEVER create it without being explicitly instructed:
+part of a model build. **Not supported on Redshift** (the macro raises with guidance — Redshift's
+vector scale path is an external service, S3 Vectors or OpenSearch, not in-database DDL; the pure-SQL
+brute-force `vector_search` is the in-warehouse path). NEVER create it without being explicitly instructed:
 
 ```bash
 dbt run-operation create_vector_index --args '{name: my_idx, relation: chunk_embeddings, column: embedding}'

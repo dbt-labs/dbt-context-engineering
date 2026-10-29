@@ -42,9 +42,31 @@
     {%- if execute -%}
         {{ exceptions.raise_compiler_error(
             "ai_agg is not implemented for the '" ~ target.type ~ "' adapter. "
-            ~ "Supported: snowflake, databricks, bigquery.") }}
+            ~ "Supported: snowflake, databricks, bigquery, redshift.") }}
     {%- endif -%}
     {{ return('null') }}
+{%- endmacro %}
+
+
+{% macro redshift__ai_agg(input_column, prompt, order_column, model) -%}
+    {{ dbt_context_engineering.require_redshift_bedrock() }}
+    {#- No native AI aggregate on Redshift, so compose like the Databricks path: collapse the group
+        with a standard SQL aggregate, then make ONE text-UDF call on the result. LISTAGG supports an
+        inline WITHIN GROUP (ORDER BY ...), so order_column IS honored here (unlike Snowflake/BigQuery).
+        `model` / var model_agg is the Bedrock inference FUNCTION name, not a model string.
+
+        ⚠️ LISTAGG has a hard per-group result-size limit (64KB) and ERRORS past it — tighter than
+        Databricks. Pair a Redshift ai_agg with guard_agg_batch (macros/cost/guard_batch.sql) in a
+        pre_hook to bound group size before this ever runs.
+
+        LISTAGG's delimiter must be a CONSTANT (Redshift rejects chr(10): "delimiter expression
+        should be constant for aggregate function LISTAGG"), so the group separator is a literal
+        newline; the per-group result still gets chr(10)||chr(10)-joined to the prompt below (that's
+        plain || concatenation, where chr(10) is fine). -#}
+    {%- set fn = model or var('model_agg', var('model_generate', none)) -%}
+    {%- if fn is none -%}{%- if execute -%}{{ exceptions.raise_compiler_error("ai_agg: set var model_agg or model_generate to the Bedrock inference FUNCTION name (Redshift routes ai_agg through the text UDF).") }}{%- else -%}{%- set fn = 'unset' -%}{%- endif -%}{%- endif -%}
+    {%- set collapsed = 'listagg(' ~ input_column ~ ", '\n') within group (order by " ~ (order_column or input_column) ~ ')' -%}
+    {{ fn }}({{ dbt_context_engineering.str_literal(prompt) }} || chr(10) || chr(10) || {{ collapsed }})
 {%- endmacro %}
 
 

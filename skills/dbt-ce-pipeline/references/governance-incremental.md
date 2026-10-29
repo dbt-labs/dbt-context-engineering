@@ -58,7 +58,9 @@ group_by_column, filter=none)` instead, which bounds per-group tokens against
 
 `dev_sample_filter(row_limit=none)` gives a portable `QUALIFY row_number() ... <= n` cap
 for dev/CI runs (falls back to `var: ai_sample_rows`). It is a dev-experience convenience,
-**not** a spend-safety mechanism — that's `guard_batch`'s job.
+**not** a spend-safety mechanism — that's `guard_batch`'s job. On **Redshift** (which has no
+`QUALIFY`) it emits the equivalent trailing `ORDER BY random() LIMIT n`, so the same positional
+rule applies there too: put it where an `ORDER BY`/`LIMIT` would go, and don't also add your own.
 
 ## The run log — `log_ai_run` / `complete_ai_run`
 

@@ -6,16 +6,21 @@
   (where 1=0), it exists purely to fix column names/types in one place.
 -#}
 {% macro ai_run_log_columns_sql() -%}
+{#- Redshift infers a varchar(1) column from `cast(null as <text>)` in a 0-row CTAS (confirmed
+    live via information_schema), so log_ai_run's INSERTs overflow with "value too long for
+    character varying(1)". An explicit max width forces a wide column there; other engines keep the
+    unbounded string type. -#}
+{%- set _str = 'varchar(65535)' if target.type == 'redshift' else dbt.type_string() -%}
 select
-    cast(null as {{ dbt.type_string() }})    as invocation_id,
-    cast(null as {{ dbt.type_string() }})    as model_name,
-    cast(null as {{ dbt.type_string() }})    as function_name,
+    cast(null as {{ _str }})    as invocation_id,
+    cast(null as {{ _str }})    as model_name,
+    cast(null as {{ _str }})    as function_name,
     cast(null as {{ dbt.type_int() }})       as row_count,
     cast(null as {{ dbt.type_numeric() }})   as est_tokens,
     cast(null as {{ dbt.type_numeric() }})   as est_cost,
     cast(null as {{ dbt.type_timestamp() }}) as run_at,
-    cast(null as {{ dbt.type_string() }})    as event,
-    cast(null as {{ dbt.type_string() }})    as node_id
+    cast(null as {{ _str }})    as event,
+    cast(null as {{ _str }})    as node_id
 -- from (select 1) gives the WHERE a FROM (BigQuery forbids WHERE without FROM); 0 rows, typed columns
 from (select 1) as _one
 where 1 = 0

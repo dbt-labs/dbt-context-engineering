@@ -28,3 +28,11 @@
 {% macro bigquery__collapse_ws(expr) -%}
     regexp_replace(trim({{ expr }}), r'\s+', ' ')
 {%- endmacro %}
+
+{#- Redshift replaces all matches by default (the 4th arg is a START POSITION, not a flag, like
+    Snowflake — so the duckdb 'g' form is unsafe). Uses the POSIX class [[:space:]] rather than \s:
+    Redshift's default (non-PCRE) regex engine supports POSIX classes unambiguously, whereas \s is a
+    Perl-ism only guaranteed under the 'p' (PCRE) parameter. -#}
+{% macro redshift__collapse_ws(expr) -%}
+    regexp_replace(trim({{ expr }}), '[[:space:]]+', ' ')
+{%- endmacro %}

@@ -38,7 +38,7 @@ raw text
 ```
 
 The flagship pattern is **semantic search** = `chunk → embed → knowledge_base → vector_search`,
-validated end to end on Snowflake, Databricks, and BigQuery. Classification/extraction are a
+validated end to end on Snowflake, Databricks, BigQuery, and Redshift. Classification/extraction are a
 *precision* enrichment layered on top (see the `dbt-ce-ai-functions` skill), not a
 required stage here.
 
@@ -179,9 +179,12 @@ the embeddings table). Embed the query with the **same** model, then rank.
 ```
 
 Returns `[id_column, select_columns..., score]`, ordered by score, tie-broken on
-`id_column`. A managed vector index (Snowflake Cortex Search, BigQuery vector index,
+`id_column`. On **Redshift** this is a pure-SQL cosine over `SUPER` arrays (no native vector type),
+so the `query_embedding` must itself be a `SUPER` array — an `embed(...)` call or
+`json_parse('[...]')`. A managed vector index (Snowflake Cortex Search, BigQuery vector index,
 Databricks Vector Search) is an **opt-in** performance upgrade created via
-`dbt run-operation create_vector_index`, it is billed and stateful, so NEVER create it unless explicitly told; 
+`dbt run-operation create_vector_index`, it is billed and stateful, so NEVER create it unless explicitly told;
+it is **not available on Redshift** (that scale path is external — S3 Vectors / OpenSearch);
 see `references/pipeline-stages.md`.
 
 ## Make it production-grade
@@ -231,9 +234,15 @@ nightly/scheduled run, a large corpus, or "production." See
 - **`embed` on DuckDB has no implementation** — the local deterministic tier can exercise
   chunking, delta, and governance plumbing (with stand-in vectors) but not real
   embeddings. Real vectors need a live warehouse.
-- **`vector_search` is `LIVE-VALIDATION DEFERRED` on the cloud engines** — the
-  brute-force default is validated on DuckDB; confirm the per-engine cosine SQL against
-  your warehouse the first time you run it live.
+- **`vector_search` is `LIVE-VALIDATION DEFERRED` on the Snowflake/Databricks/BigQuery
+  engines** — the brute-force default is validated on DuckDB (and live on **Redshift**);
+  confirm the per-engine cosine SQL against your warehouse the first time you run it live.
+- **Redshift specifics:** `embed` returns a `SUPER` array and the model vars name a Bedrock
+  **inference UDF** (provision it once via `create_bedrock_function` — see `dbt-ce-setup`);
+  `vector_search`'s `query_embedding` must be a `SUPER` array; `create_vector_index` and the
+  `embedding_canary` drift monitor are **not supported** on Redshift. Chunking, incremental
+  re-embed, and `dev_sample_filter` all work (the last uses `ORDER BY random() LIMIT n`, since
+  Redshift has no `QUALIFY`).
 
 ## Reference files
 

@@ -72,6 +72,26 @@
     ))
 {%- endmacro %}
 
+{#- The embedding canary (opt-in beta monitor, ADR-0026) needs a SCALAR cosine between a live embedding
+    and a stored baseline, embeddable directly in a SELECT. Every other engine has a scalar
+    cosine/distance function; Redshift has none, and expressing it as a correlated scalar subquery that
+    unnests an OUTER row's SUPER column is not something we ship unvalidated. So the canary is NOT YET
+    supported on Redshift — only this monitoring probe is deferred; the core retrieval path
+    (brute-force vector_search over the SUPER embedding column) IS supported. To lift this, provide a
+    scalar cosine (e.g. a Lambda UDF) or live-validate a correlated-unnest form.
+
+    execute-gated + 'null' placeholder so a disabled/parse context still renders (same shape as
+    default__embed); the raise fires only when someone actually enables the canary on Redshift. -#}
+{% macro redshift__canary_cosine_similarity(live_vector_expr, baseline_json_expr, dimension) -%}
+    {%- if execute -%}
+        {{ exceptions.raise_compiler_error(
+            "embedding_canary is not supported on Redshift yet: it needs a scalar cosine Redshift has "
+            ~ "no built-in for. Disable it (unset monitoring: +enabled on Redshift). Brute-force "
+            ~ "vector_search over the SUPER embedding column IS supported. See ADR-0026 / ADR-0005.") }}
+    {%- endif -%}
+    {{ return('null') }}
+{%- endmacro %}
+
 {#-
   canary_vector_to_json(vector_expression) -> a SQL expression: vector_expression serialized as a
   JSON-array string ("[0.1,0.2,...]"), the exact format embedding_canary_baseline.baseline_vector
@@ -101,4 +121,12 @@
 
 {% macro bigquery__canary_vector_to_json(vector_expression) -%}
     to_json_string({{ vector_expression }})
+{%- endmacro %}
+
+{#- Redshift: JSON_SERIALIZE turns a SUPER array into its '[...]' JSON-array string, exactly the
+    format embedding_canary_baseline.baseline_vector stores. (Only used by the re-bless workflow,
+    which also needs canary_cosine_similarity — deferred on Redshift — so this is provided for
+    completeness/symmetry.) -#}
+{% macro redshift__canary_vector_to_json(vector_expression) -%}
+    json_serialize({{ vector_expression }})
 {%- endmacro %}

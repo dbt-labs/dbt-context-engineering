@@ -58,3 +58,15 @@
 {% macro bigquery__str_literal(s) -%}
     {{ return(dbt_context_engineering._ce_str_literal(s, true, "\\'")) }}
 {%- endmacro %}
+
+{#- Redshift treats backslash as an ESCAPE character inside single-quoted literals, so a backslash
+    in a prompt (a regex `\d+`, a Windows path `C:\Users`) must be DOUBLED — same as Snowflake/
+    Databricks — or it is silently consumed. Confirmed live: `str_literal('a\d+b')` left as the ANSI
+    default evaluated to `ad+b` on the cluster (standard_conforming_strings off). `''` quote-doubling
+    and chr(10) newlines ARE fine on Redshift (confirmed live), so only backslash-escaping is needed.
+    (A cluster with standard_conforming_strings ON would double a literal backslash in a prompt into
+    two — a visible, debuggable artifact — rather than the silent corruption the default risks, so
+    escaping is the safer default for the engine.) -#}
+{% macro redshift__str_literal(s) -%}
+    {{ return(dbt_context_engineering._ce_str_literal(s, true)) }}
+{%- endmacro %}

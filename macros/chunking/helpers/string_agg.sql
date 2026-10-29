@@ -31,3 +31,19 @@
 {% macro databricks__string_agg(expr, sep, order_expr) -%}
     array_join(transform(array_sort(collect_list(struct({{ order_expr }} as _o, {{ expr }} as _v))), x -> x._v), '{{ sep }}')
 {%- endmacro %}
+
+{#- Redshift: LISTAGG with an inline WITHIN GROUP (ORDER BY ...), same shape as Snowflake. Redshift
+    (like Postgres) accepts a raw newline inside the delimiter literal, so sep is embedded directly.
+    ⚠️ LISTAGG has a 64KB per-group result limit and errors past it — for chunk_text over very large
+    partitions, keep chunk sizes bounded (the token cap already does). -#}
+{% macro redshift__string_agg(expr, sep, order_expr) -%}
+    {#- Redshift LISTAGG DROPS empty-string elements entirely — including their separator (confirmed
+        live: listagg of 'aa','','bb' yields 'aa,bb', not 'aa,,bb'; all-empty yields ''). The other
+        engines' string_agg keep an empty element's separator, and chunk() relies on that: it
+        coalesces a null/empty unit to '' precisely so the unit still occupies a position in
+        chunk_text (ADR-0011 lineage). To match, substitute a sentinel (chr(1), a control char never
+        in corpus text) for an empty element so LISTAGG keeps its separator, then strip the sentinel
+        back out. Non-empty elements — and the partition-hash use, whose elements are never empty —
+        are untouched. -#}
+    replace(listagg(case when ({{ expr }}) = '' then chr(1) else ({{ expr }}) end, '{{ sep }}') within group (order by {{ order_expr }}), chr(1), '')
+{%- endmacro %}

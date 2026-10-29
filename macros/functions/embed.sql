@@ -27,9 +27,31 @@
     {%- if execute -%}
         {{ exceptions.raise_compiler_error(
             "embed is not implemented for the '" ~ target.type ~ "' adapter. "
-            ~ "Supported: snowflake, databricks, bigquery.") }}
+            ~ "Supported: snowflake, databricks, bigquery, redshift.") }}
     {%- endif -%}
     {{ return('null') }}
+{%- endmacro %}
+
+
+{% macro redshift__embed(input_column, model) -%}
+    {{ dbt_context_engineering.require_redshift_bedrock() }}
+    {#- On Redshift, `model` / var embedding_model is the Bedrock embedding FUNCTION name (minted by
+        create_bedrock_function with REQUEST_TYPE RAW, RESPONSE_TYPE SUPER over e.g. Titan embeddings),
+        NOT a model string. A RAW function takes ONE SUPER request body you construct for the model;
+        for Titan that is object('inputText', <text>), and the vector is at .embedding of the SUPER
+        response. (Confirm the request/response key names for your chosen embedding model at
+        live-validation — they are model-specific and case-sensitive.) -#}
+    {%- set fn = model or var('embedding_model', none) -%}
+    {#- execute-gated; see snowflake__embed. -#}
+    {%- if fn is none -%}{%- if execute -%}{{ exceptions.raise_compiler_error("embed: set var embedding_model to the Bedrock embedding FUNCTION name created by create_bedrock_function (Redshift has no built-in inline AI function).") }}{%- else -%}{%- set fn = 'unset' -%}{%- endif -%}{%- endif -%}
+    {#- The RAW Titan function returns the whole response SUPER ({embedding:[...], inputTextTokenCount:N});
+        the vector is at .embedding. But Redshift's PARSER rejects path navigation applied directly to a
+        function-call result — `ce_embed(...).embedding` is a syntax error (confirmed live 2026-10-22).
+        Extract it via pure function nesting instead (parser-safe): serialize the SUPER response to JSON
+        text, pull the embedding array out as text, and JSON_PARSE it back to a SUPER array. Confirmed
+        live: get_array_length of this = 1024 for titan-embed-text-v2. (JSON_SERIALIZE caps at 64KB, which
+        comfortably fits Titan's ≤1024-dim vectors; a multi-thousand-dim model could approach that.) -#}
+    json_parse(json_extract_path_text(json_serialize({{ fn }}(object('inputText', {{ input_column }}))), 'embedding'))
 {%- endmacro %}
 
 

@@ -95,12 +95,18 @@ On **Databricks**, `ai_agg` has no internal map-reduce, so guard each group:
 ```
 Set `var: max_agg_group_tokens` accordingly (see `dbt-ce-setup`).
 
+On **Redshift**, `ai_agg` has no native aggregate either, so (like Databricks) it collapses the
+group with `LISTAGG` and makes one text-UDF call — guard it the same way. Note Redshift's `LISTAGG`
+has a **64KB per-group result cap** and errors past it, so bounding group size matters more here.
+
 **Per-engine behavior of `order_column` and `model` (ADR-0028) — don't assume they're portable:**
-- `order_column`: honored on **Databricks**; a **no-op on BigQuery**; on **Snowflake** the macro
-  cannot reorder the `FROM`, so pre-sort the input yourself (feed `ai_agg` an already-ordered CTE)
-  if within-group order matters.
-- `model`: honored on **Databricks** and **BigQuery**; a **no-op on Snowflake** (Cortex picks the
-  model internally). This is the same reason `model_classify` is ignored on Snowflake.
+- `order_column`: honored on **Databricks** and **Redshift** (both use an inline
+  `LISTAGG ... WITHIN GROUP (ORDER BY ...)` / sorted collapse); a **no-op on BigQuery**; on
+  **Snowflake** the macro cannot reorder the `FROM`, so pre-sort the input yourself (feed `ai_agg`
+  an already-ordered CTE) if within-group order matters.
+- `model`: honored on **Databricks**, **BigQuery**, and **Redshift** (on Redshift it is the text
+  inference UDF name); a **no-op on Snowflake** (Cortex picks the model internally). This is the
+  same reason `model_classify` is ignored on Snowflake.
 
 If order within a group matters and you target Snowflake, sort in a CTE first rather than relying
 on `order_column`.
@@ -113,17 +119,24 @@ on `order_column`.
 | `field(ai_result, field, as_type=none)` | one field of a structured `generate`/`extract`, cast to `as_type` |
 
 These exist because each engine wraps structured output differently (Snowflake `:response`
-envelope, BigQuery `.result` struct / `.<field>` access, Databricks JSON). `text`/`field`
-normalize that so your model reads the same on every adapter. **Flatten with `field()` before**
-`conforms_to_schema` (label check) or a `grounded` test (quote check).
+envelope, BigQuery `.result` struct / `.<field>` access, Databricks JSON, **Redshift** a plain
+JSON string read with `json_extract_path_text`). `text`/`field` normalize that so your model reads
+the same on every adapter. **Flatten with `field()` before** `conforms_to_schema` (label check) or
+a `grounded` test (quote check).
 
 ## Per-engine notes
 
 - **Enum enforcement:** Snowflake/Databricks structured output carries the enum natively;
   BigQuery's output schema can't, so the wrappers inject the allowed values into the prompt from
-  the schema `enum` automatically — you still define the enum once in `schema_def`.
-- **Output caps:** `var: max_output_tokens` bounds `generate` on all three; on Snowflake/
+  the schema `enum` automatically — you still define the enum once in `schema_def`. **Redshift**
+  has no structured output at all (Bedrock returns plain text), so it takes the same prompt-
+  injection route as BigQuery **plus** an explicit "respond as JSON / one bare label" instruction:
+  the contract is **best-effort, prompt-enforced, not structurally guaranteed**. `conforms_to_schema`
+  is how you catch a Redshift result that drifts off the enum.
+- **Output caps:** `var: max_output_tokens` bounds `generate` on all engines; on Snowflake/
   Databricks `classify`/`extract` are bounded by their schema, no separate cap. On BigQuery set
-  `var: bq_thinking_budget: 0` for structured tasks.
+  `var: bq_thinking_budget: 0` for structured tasks. On **Redshift** the cap maps to the UNIFIED
+  inference-config `maxTokens` (camelCase, case-sensitive).
 - **generate/extract are beta** in the package (validated but with `LIVE-VALIDATION DEFERRED`
-  aspects); `classify` and `embed` are the most exercised.
+  aspects); `classify` and `embed` are the most exercised. The **Redshift** AI path (Bedrock via
+  `CREATE EXTERNAL MODEL` inference UDFs) is live-validated end to end.

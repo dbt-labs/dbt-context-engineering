@@ -53,8 +53,10 @@ the prompt. That one enum drives:
 
 1. the `classify` label set,
 2. the `conforms_to_schema` test (labels stay in-taxonomy),
-3. BigQuery prompt-injected enum enforcement (the wrappers copy the enum into the prompt because
-   BigQuery's output schema can't express an enum).
+3. BigQuery **and Redshift** prompt-injected enum enforcement (the wrappers copy the enum into the
+   prompt because neither can express the enum in native structured output — BigQuery's output
+   schema can't carry it, and Redshift's Bedrock path has no structured output at all, so its
+   whole contract is prompt-enforced/best-effort).
 
 ```jinja
 {% macro schema__fact_extract__v1() -%}

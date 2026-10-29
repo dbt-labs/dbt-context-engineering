@@ -23,9 +23,29 @@
     {%- if execute -%}
         {{ exceptions.raise_compiler_error(
             "extract is not implemented for the '" ~ target.type ~ "' adapter. "
-            ~ "Supported: snowflake, databricks, bigquery.") }}
+            ~ "Supported: snowflake, databricks, bigquery, redshift.") }}
     {%- endif -%}
     {{ return('null') }}
+{%- endmacro %}
+
+
+{% macro redshift__extract(input_column, prompt, output_schema, model) -%}
+    {{ dbt_context_engineering.require_redshift_bedrock() }}
+    {#- extract is the engine's structured-generate primitive here too (same as Snowflake/Databricks/
+        BigQuery). Redshift has no response_format, so constrain enums (augment_prompt) + instruct the
+        JSON shape (redshift_output_instruction) and parse the text reply back with field() —
+        best-effort, prompt-enforced. output_schema is REQUIRED (enforced by the outer extract macro);
+        keep an optional evidence/quote field in it so a quote-less row yields null, not a fabrication. -#}
+    {%- set fn = model or var('model_extract', var('model_generate', none)) -%}
+    {%- if fn is none -%}{%- if execute -%}{{ exceptions.raise_compiler_error("extract: set var model_extract or model_generate to the Bedrock inference FUNCTION name (Redshift routes extract through the text UDF).") }}{%- else -%}{%- set fn = 'unset' -%}{%- endif -%}{%- endif -%}
+    {%- set _p = dbt_context_engineering.augment_prompt(prompt, output_schema) ~ dbt_context_engineering.redshift_output_instruction(output_schema, 'json') -%}
+    {%- set _max_out = var('max_output_tokens', none) -%}
+    {{ fn }}(
+        {{ dbt_context_engineering.render_prompt(_p, input_column) }}
+        {%- if _max_out is not none %},
+        object('maxTokens', {{ _max_out | int }})
+        {%- endif %}
+    )
 {%- endmacro %}
 
 

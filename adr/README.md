@@ -44,7 +44,10 @@ just record the choice.
 | [0027](0027-classification-as-a-second-privileged-knowledge-base-column.md) | Classification as a second privileged knowledge_base column | Accepted |
 | [0028](0028-add-ai-agg-group-level-aggregation.md) | Add `ai_agg`: a fifth operation for group-level LLM aggregation | Accepted |
 | [0032](0032-dbt-version-floor-and-fusion-support.md) | Raising the dbt version floor and declaring Fusion support | Accepted |
+| [0033](0033-ai-run-log-node-identity.md) | Record the dbt node identity in `ai_run_log` | Accepted |
+| [0034](0034-run-log-target-ownership-under-deferral.md) | Keep the AI run log in the current target under state deferral | Accepted |
 | [0035](0035-per-call-token-estimate-for-the-guard-and-the-log.md) | Estimate the whole AI call per row, with the prompt named once in model meta | Accepted |
+| [0036](0036-redshift-support-bedrock-external-models.md) | Redshift support: Bedrock inference UDFs, best-effort structured output, pure-SQL cosine | Accepted |
 
 ## New here? A reading path
 

@@ -9,6 +9,9 @@
 #   - integration_tests/cloud  -> targets `snowflake` / `databricks` / `bigquery` (live warehouses;
 #                                                              real AI calls, real cost — see
 #                                                              TESTING.md §3)
+#   - integration_tests/redshift -> target `redshift`  (live Redshift + Amazon Bedrock; real AI
+#                                                        calls — provision the Bedrock inference UDFs
+#                                                        first, see integration_tests/redshift/README.md)
 #
 # Copy the block below into ~/.dbt/profiles.yml (merging if you already have other profiles there)
 # and replace every `<...>` placeholder with real values. Never commit real credentials — this
@@ -55,3 +58,17 @@ dbt_context_engineering:
       threads: 4
       # bq_connection is a dbt VAR (set in dbt_project.yml/--vars), not a profile field — leave
       # unset here to use the service-account/default connection path.
+
+    # --- integration_tests/redshift, --target redshift -------------------------------------------
+    redshift:
+      type: redshift
+      host: <cluster_endpoint>          # e.g. my-cluster.abc123.us-east-2.redshift.amazonaws.com
+      user: <username>
+      password: <password_or_use_an_iam_config_instead>
+      dbname: <database>
+      port: 5439
+      schema: <schema>
+      threads: 4
+      # AI runs through Amazon Bedrock inference UDFs created with CREATE EXTERNAL MODEL — a one-time
+      # setup step (the create_bedrock_function run-operation), NOT a profile field. The model_* /
+      # embedding_model vars then name those UDFs. See integration_tests/redshift/README.md.

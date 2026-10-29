@@ -30,6 +30,14 @@
     cast(get_json_object({{ ai_result }}, '$.{{ field }}') as {{ as_type }})
 {%- endmacro %}
 
+{#- Redshift's Bedrock text UDF returns a JSON STRING (there is no structured/response_format path),
+    so read a top-level field with JSON_EXTRACT_PATH_TEXT. Pass each path element as its own quoted
+    arg (not a '$.f' JSONPath). Best-effort: if the model didn't return valid JSON this yields null,
+    which is the intended signal, not a hard error. -#}
+{% macro redshift__field(ai_result, field, as_type) -%}
+    cast(json_extract_path_text({{ ai_result }}, '{{ field }}') as {{ as_type }})
+{%- endmacro %}
+
 {#- Snowflake AI_COMPLETE(response_format=…) / AI_EXTRACT return a VARIANT OBJECT — path-access it.
     Parenthesize the operand so a function-call result (not just a column) is field-addressable. -#}
 {% macro snowflake__field(ai_result, field, as_type) -%}

@@ -300,13 +300,18 @@ re-embedded, rather than silently frozen the way version_guard alone would leave
 ADR-0023), also only appears across sequential runs:
 
 ```bash
-dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb --indirect-selection cautious \
   --select content_hash_delta_stg content_hash_delta ai_run_log fixture_utterances --full-refresh
 # ^ ch_edit_id defaults to -1: a 10-row baseline, no simulated edit.
-dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb \
+dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb --indirect-selection cautious \
   --select content_hash_delta_stg content_hash_delta ai_run_log assert_content_hash_delta \
   --vars '{ch_edit_id: 5}'   # simulates utterance_id 5's source text changing
 ```
+
+> `--indirect-selection cautious` is required here, not optional: the selection includes
+> `ai_run_log`, so default *eager* selection also drags in invocation-scoped tests (`assert_run_log`,
+> `assert_run_log_node_id`, `assert_call_tokens`) whose other parents this step never builds, and
+> they fail by construction. See §4.11, which carries the flag on every selective step for this reason.
 
 `assert_content_hash_delta` expects `row_count = 1` on the phase-2 run (exactly the edited row, not
 the whole 10-row corpus and not 0), and that utterance_id 5's `embedded_at` is strictly newer than
@@ -324,8 +329,9 @@ column instead of the outer row) returns wrong answers whenever the correlated c
 on both sides, which they always do here. See ADR-0023's Reasoning section for the full case.
 
 `content_hash_delta` and its staging model/tests mirror this exact scenario on all three cloud
-targets (same two-build sequence, `--target snowflake/databricks/bigquery --select content_hash_delta_stg
-content_hash_delta ai_run_log --vars '{ch_edit_id: 5}'` after a full-refresh baseline), confirming
+targets (same two-build sequence, `--target snowflake/databricks/bigquery --indirect-selection cautious
+--select content_hash_delta_stg content_hash_delta ai_run_log --vars '{ch_edit_id: 5}'` after a
+full-refresh baseline), confirming
 the same two things a cloud run alone can prove: the row-value `NOT IN` predicate works inside each
 engine's real incremental merge, not just in isolation, and BigQuery's merge log line for the
 phase-2 build shows exactly 1 row processed, matching the edited row, not the whole 10-row corpus.

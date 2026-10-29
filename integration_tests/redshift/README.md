@@ -59,15 +59,21 @@ repeat-build artifact described in `TESTING.md`). Run the same phase-2 sequences
 
 ```bash
 # §4.3 content-hash delta (expect assert_content_hash_delta row_count = 1)
-dbt build --project-dir integration_tests/redshift --target redshift --full-refresh \
+dbt build --project-dir integration_tests/redshift --target redshift --full-refresh --indirect-selection cautious \
   --select content_hash_delta_stg content_hash_delta ai_run_log fixture_utterances --vars '{ai_functions_enabled: true}'
-dbt build --project-dir integration_tests/redshift --target redshift \
+dbt build --project-dir integration_tests/redshift --target redshift --indirect-selection cautious \
   --select content_hash_delta_stg content_hash_delta ai_run_log assert_content_hash_delta \
   --vars '{ai_functions_enabled: true, ch_edit_id: 5}'
 
 # §4.5 chunk delta;   §4.6 attach_metadata delta;   §4.7 knowledge_base delta — same shape:
 #   baseline --full-refresh, then phase-2 with cd_phase: 2 / amd_edit_id: doc_2 / kbd_phase: 2
 ```
+
+> **Keep `--indirect-selection cautious` on every phase-2 build above.** The selection includes
+> `ai_run_log`, so dbt's default *eager* selection also pulls the invocation-scoped
+> `assert_run_log`, `assert_run_log_node_id` and `assert_call_tokens` — whose other parents
+> (`signals`, `logged_prompted`) this step doesn't build — and they fail by construction, not for
+> any real defect (`TESTING.md` §4.11). `cautious` restricts the run to the models/tests named.
 
 These exercise `redshift__row_value_not_in` (the content-hash/partition delta key check), which on
 Redshift collapses the tuple to an `md5` key rather than a row-constructor `IN`.

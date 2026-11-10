@@ -109,6 +109,16 @@ Step 1 of the TESTING.md section 4.11 cloud pass (`build --full-refresh` with `a
 
 TOTAL is 148, while TESTING.md section 3.3 still says 145, so that number needs updating. The multi-run delta steps (4.1 and 4.3 to 4.7) and the orphan sequence were not run in this pass.
 
+## Databricks runtime check: live probe (hub #178, 2026-11-10)
+
+Probed the configured Databricks warehouse, which runs the AI functions successfully (148 of 148 above).
+
+- `select to_json(current_version())` returns `{"dbsql_version":"2026.45", ...}` with **no `dbr_version` key**. `current_version().dbr_version` is null.
+- So a check written as "dbr_version >= 15.4" would fail a warehouse that works. The 15.4 LTS requirement applies to all-purpose clusters. SQL warehouses report a `dbsql_version` instead, and the docs give no minimum for it.
+- Nothing in `current_version()` or `version()` says whether a warehouse is SQL Classic, the other documented exclusion.
+- The probe took about 5 seconds warm and 14 seconds with a cold start, per call, which is the per-model cost of enforcing it.
+- An unmet prerequisite could not be reproduced, so the exact error text for it is unrecorded.
+
 ## Caveats on this assessment
 
 - It reads documentation and test files. It did not execute any suite, so it cannot confirm which deferred markers are stale.

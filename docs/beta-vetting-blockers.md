@@ -145,6 +145,12 @@ Consequences:
 - Below the floor the failures are named Databricks errors, but they do not name the runtime version.
 - Whether `vector_cosine_similarity` exists on a newer cluster runtime, or only on SQL warehouses, is not established.
 
+### DBR 18.2 cluster
+
+`vector_cosine_similarity` is documented as Databricks Runtime 18.1 and above. On a DBR 18.2 all-purpose cluster (`dbr_version` `18.2.x-photon-scala2.13`), `search`, `assert_search`, `assert_canary_vector_roundtrip` and `assert_embedding_canary_matches_baseline` all pass (PASS=5 ERROR=0). The run reused the `embeddings` table built by the 17.3 baseline in the same schema, so only `search` and the canary tests executed, not a full baseline.
+
+Working support statement for Databricks, as run: AI wrappers on SQL Pro and Serverless warehouses and on DBR 17.3 and above clusters; `vector_search` and `embedding_canary` on SQL warehouses and on DBR 18.1 and above clusters (tested at 18.2). Not tested: 15.4 to 16.x, and a full baseline on 18.2.
+
 ## Caveats on this assessment
 
 - It reads documentation and test files. It did not execute any suite, so it cannot confirm which deferred markers are stale.

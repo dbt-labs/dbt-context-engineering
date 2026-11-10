@@ -33,7 +33,7 @@ mkdir -p target   # duckdb writes its file relative to CWD; ensure the dir exist
 dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb --full-refresh
 ```
 
-Expected result: **`Done. PASS=201 WARN=0 ERROR=0 SKIP=0`**, verified 2026-09-24. The count grows
+Expected result: **`Done. PASS=206 WARN=0 ERROR=0 SKIP=0`**, verified 2026-11-10. The count grows
 as tests are added, so treat the run summary as the source of truth rather than this number.
 
 > ⚠️ **Always pass `--full-refresh`.** Several tests are phase-parameterized and read their
@@ -126,9 +126,10 @@ dbt build --project-dir integration_tests/cloud --target bigquery --full-refresh
 There is no CI job for this. The cloud suite runs locally, against your own profile, by following
 §4's cloud pass.
 
-Expected result: all models build and all **33** `assert_*` tests pass, for
-`TOTAL=145` per target (verified 2026-10-02 on Snowflake, Databricks, and BigQuery, under both
-dbt Core and dbt Fusion). A failure here is meaningful
+Expected result: all models build and all **34** `assert_*` tests pass, for
+`TOTAL=152` per target (verified 2026-11-10 on Snowflake, Databricks, and BigQuery under dbt Core 1.12;
+the earlier Core and Fusion runs on 2026-10-02 predate the typed-cast and oversized-group probes).
+The Redshift project's baseline is `TOTAL=144` (verified 2026-11-10). A failure here is meaningful
 — it means a wrapper's dialect is wrong for that account, a model returned nothing, or the AI
 produced an off-taxonomy / ungrounded result. See §5.
 
@@ -647,7 +648,7 @@ Fusion, which changes what you are testing without saying so.
 
 | # | Step | Assumes | Pass looks like |
 |---|---|---|---|
-| 1 | Full-refresh baseline: `$DBT build $D --full-refresh` | anything | `PASS=201` |
+| 1 | Full-refresh baseline: `$DBT build $D --full-refresh` | anything | `PASS=206` |
 | 2 | §4.1 version guard, v1 then v2 | step 1 | both runs green |
 | 3 | §4.10 `vg_adopt` adoption | step 1 | second run green, v1 stamped |
 | 4 | §4.2 `logged_delta` phase 2 | step 1 | `row_count = 5` |
@@ -673,21 +674,21 @@ database inconsistent:
 ```bash
 $DBT build $D --indirect-selection cautious --full-refresh \
   --select orphan_chunks orphan_embeddings --vars '{oc_target_tokens: 20}'
-$DBT build $D --full-refresh          # back to PASS=201
+$DBT build $D --full-refresh          # back to PASS=206
 ```
 
 #### cloud pass (real AI calls, run once per target)
 
 | # | Step | Assumes | Pass looks like |
 |---|---|---|---|
-| 1 | Full-refresh baseline: `$DBT build $C --full-refresh --vars '{ai_functions_enabled: true}'` | anything | `TOTAL=145`, ideally `PASS=145` |
+| 1 | Full-refresh baseline: `$DBT build $C --full-refresh --vars '{ai_functions_enabled: true}'` | anything | `TOTAL=152`, ideally `PASS=152` |
 | 2 | §4.1 version guard, v1 then v2 | step 1 | both runs green |
 | 3 | §4.3 content-hash delta phase 2 | a *fresh* step 1 | `row_count = 1` |
 | 4 | §4.5 chunk partition delta phase 2 | step 1 | per §4.5 |
 | 5 | §4.6 attach_metadata delta phase 2 | step 1 | per §4.6 |
 | 6 | §4.7 knowledge_base per-arm delta phase 2 | step 1 | per §4.7 |
 | 7 | §4.4 orphan sequence | step 1 | the `relationships` test **FAILS** |
-| 8 | **Cleanup rebuild (mandatory)** | step 7 | `TOTAL=145` again |
+| 8 | **Cleanup rebuild (mandatory)** | step 7 | `TOTAL=152` again |
 
 §4.1's cloud half used to run in a CI job. That job is gone (it never once executed and depended
 on a repo secret that never existed), so this pass is now the only thing covering it.
@@ -705,6 +706,26 @@ $DBT build $C --full-refresh --vars '{ai_functions_enabled: true}'
 ```
 
 The pass is complete when the final rebuild is clean. Do not leave a warehouse mid-sequence.
+
+#### Optional probes (hub #178)
+
+Two probes ship in both `integration_tests/cloud` and `integration_tests/redshift`.
+
+- **Typed casts.** `typed_generate`, `typed_flatten` and `assert_typed_field_casts` run in the
+  baseline. One structured `generate` call with an integer, a number and a boolean field, read back
+  through `field(..., as_type=...)`. The prompt pins the values (7, 0.25, true), so a failing row
+  means a broken cast path or a model that dropped a field. On BigQuery, `AI.GENERATE` does not force
+  required fields, and an earlier, vaguer prompt got a null `flag` because Gemini omitted it. Read
+  the raw `result` before blaming `field`.
+- **Oversized `ai_agg` group.** `ai_agg_oversized_input`, `ai_agg_oversized` and
+  `assert_ai_agg_oversized` are disabled unless `run_oversized_agg_probe` is true. They build one
+  group of 1000 rows, about 70KB and 17k estimated tokens. Run with
+  `--vars '{ai_functions_enabled: true, run_oversized_agg_probe: true, max_agg_group_tokens: 1000000}'`
+  on Snowflake and BigQuery so the guard does not block their native aggregate. Recorded 2026-11-10:
+  Snowflake, BigQuery and Databricks build the group, and Redshift fails with
+  `Result size exceeds LISTAGG limit`. With `max_agg_group_tokens: 1000`, `guard_agg_batch` raises
+  its named error on all four engines before any AI call. This size is far below any model's context
+  window, so it does not exercise Snowflake and BigQuery's internal map-reduce.
 
 ---
 

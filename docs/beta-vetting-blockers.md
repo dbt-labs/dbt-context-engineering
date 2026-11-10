@@ -151,6 +151,14 @@ Consequences:
 
 Working support statement for Databricks, as run: AI wrappers on SQL Pro and Serverless warehouses and on DBR 17.3 and above clusters; `vector_search` and `embedding_canary` on SQL warehouses and on DBR 18.1 and above clusters (tested at 18.2). Not tested: 15.4 to 16.x, and a full baseline on 18.2.
 
+## Typed casts and oversized groups (hub #178, 2026-11-10)
+
+New probes in both integration projects. Baselines after the change: Snowflake 152, Databricks 152 and BigQuery 152 of 152, Redshift 144 of 144, duckdb 206 of 206.
+
+- **Typed `field` casts** (integer, number, boolean) pass on all four engines. It found a real defect: `redshift__field` could not produce a boolean, because Redshift rejects a text or varchar to boolean cast. It now maps `'true'` and `'false'` explicitly. On BigQuery a vague prompt got a null `flag` because Gemini omitted the key, which is model behavior, not a `field` defect.
+- **Oversized `ai_agg` group** (1000 rows, about 70KB, 17k tokens): Snowflake, BigQuery and Databricks build it. Redshift fails with `Result size exceeds LISTAGG limit`. This size is below any model context window, so the map-reduce path and Databricks' real ceiling were not exercised.
+- **`guard_agg_batch`** raises its named error on all four engines at a lowered ceiling, before any AI call. Its trip path had only been covered on duckdb.
+
 ## Caveats on this assessment
 
 - It reads documentation and test files. It did not execute any suite, so it cannot confirm which deferred markers are stale.

@@ -123,6 +123,28 @@ Probed the configured Databricks warehouse, which runs the AI functions successf
 - Not reproduced: the error from an all-purpose cluster below DBR 15.4.
 - Decision: do not enforce. The macro comment, TESTING.md section 6 and the README row now say so.
 
+## Databricks all-purpose cluster probes (hub #178, 2026-11-10)
+
+Same baseline build (`--full-refresh`, `ai_functions_enabled: true`, dbt Core 1.12.0) against two all-purpose clusters. `current_version()` on a cluster does populate `dbr_version` (14.3 reported `14.3.x-photon-scala2.12`).
+
+| Cluster | Result |
+|---|---|
+| DBR 14.3 | PASS=127 ERROR=8 SKIP=13 TOTAL=148 |
+| DBR 17.3 | PASS=144 ERROR=3 SKIP=1 TOTAL=148 |
+
+DBR 14.3 failures:
+- `generate`, `extract`, `generate_text`: `[UNRECOGNIZED_PARAMETER_NAME]` on `ai_query`, which has no `modelParameters` argument at this runtime. A bare `ai_query` call succeeds, so the floor matters for the wrappers, not for the function existing.
+- `signals`, `signals_adversarial` (`classify`): `[AI_FUNCTION_UNSUPPORTED_ERROR]` for `ai_classify`.
+- `search` and both canary tests: `[UNRESOLVED_ROUTINE]` for `vector_cosine_similarity`.
+
+DBR 17.3 failures, all one cause:
+- `search` and both canary tests: `[UNRESOLVED_ROUTINE] Cannot resolve routine vector_cosine_similarity`. Every AI wrapper (`generate`, `extract`, `classify`, `embed`, `ai_agg`, `text`, `field`) passed on 17.3.
+
+Consequences:
+- `vector_search` (README: validated on Databricks) and `embedding_canary` ran on SQL warehouses only. On both clusters tested, including 17.3, they fail because `vector_cosine_similarity` does not resolve. Validation claims for those two need a SQL-warehouse scope.
+- Below the floor the failures are named Databricks errors, but they do not name the runtime version.
+- Whether `vector_cosine_similarity` exists on a newer cluster runtime, or only on SQL warehouses, is not established.
+
 ## Caveats on this assessment
 
 - It reads documentation and test files. It did not execute any suite, so it cannot confirm which deferred markers are stale.

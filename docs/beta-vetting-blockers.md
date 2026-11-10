@@ -96,6 +96,19 @@ Documentation conflicts were checked against the recorded cloud pass of 2026-09-
 - The duckdb deterministic suite passes (206 of 206, dbt Core 1.12.0).
 - Nothing was moved to Validated. No new billed cloud pass has run, and the remaining blockers above (typed casts, oversized `ai_agg` groups, the `create_vector_index` cycle, canary drift evidence, the Databricks prerequisite check) still stand.
 
+## Live baseline pass (hub #178, 2026-11-10)
+
+Step 1 of the TESTING.md section 4.11 cloud pass (`build --full-refresh` with `ai_functions_enabled: true`, dbt Core 1.12.6, project-local venvs), run once per engine. Sample data only.
+
+| Engine | Result |
+|---|---|
+| Snowflake | PASS=148 ERROR=0 TOTAL=148 |
+| Databricks | PASS=148 ERROR=0 TOTAL=148 |
+| BigQuery | PASS=148 ERROR=0 TOTAL=148 |
+| Redshift | Not run. Connection timed out (`TimeoutError(60)`) before any model built, so nothing was billed. |
+
+TOTAL is 148, while TESTING.md section 3.3 still says 145, so that number needs updating. The multi-run delta steps (4.1 and 4.3 to 4.7) and the orphan sequence were not run in this pass.
+
 ## Caveats on this assessment
 
 - It reads documentation and test files. It did not execute any suite, so it cannot confirm which deferred markers are stale.

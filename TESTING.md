@@ -162,8 +162,8 @@ What a clean warehouse pass looks like: every model `OK`, every test `PASS`, and
 (b) an unmet prerequisite (Databricks needs **DBR 15.4 LTS or above** and is not available on
 Databricks SQL Classic; BigQuery needs the
 AI API enabled), and (c) on BigQuery, a null `signal`/`evidence` in `assert_*_conforms` (run with
-`--target bigquery`) → the STRUCT field-access assumption needs adjusting (ping me with the row and I'll
-fix the one line).
+`--target bigquery`) → the STRUCT field-access path has regressed. It was confirmed live on
+2026-09-25, so check the model output before assuming the macro is wrong.
 
 ---
 
@@ -794,17 +794,18 @@ What remains uncovered or conditional (everything else is now covered on all thr
 - **Some live tests are behavioral, not deterministic gates.** `assert_search` (top-hit ranking),
   the `*_conforms_*` checks, and `assert_extract_grounded` depend on live model output, so they can
   fail from model nondeterminism rather than a code bug. Read a failing row before assuming a regression.
-- **BigQuery classify/extract STRUCT field access is assumed-from-docs** (Snowflake + Databricks
-  shapes are confirmed as of 2026-07-29). `assert_signals_conform` / `assert_extract_conforms` (on `--target bigquery`)
-  are the confirmation — a **null** result means the `.<field>` path is wrong for BigQuery.
+- **BigQuery classify/extract STRUCT field access is confirmed live** (2026-09-25: the cloud suite
+  ran 144 of 144 on BigQuery, including `assert_signals_conform` and `assert_extract_conforms`).
+  A **null** from either on `--target bigquery` still means the `.<field>` path is wrong, so
+  they remain the regression check.
 - **Drift detection is bounded by how often someone runs the cloud pass.** `embedding_canary`
   finds provider drift by comparing runs spaced apart in time, and nothing runs it on a
   schedule: no CI job reaches a warehouse, the repository holds no Actions secrets, and adding
   them plus a scheduled workflow was decided against. A vendor changing a pinned model's output
   is therefore invisible until the next manual cloud pass. This is a constraint on how the
   capability is operated here, not a gap in the suite or in ADR-0026's design.
-- **BigQuery Vertex key casing** (`generationConfig`/`thinkingConfig`) — re-confirm on the first live
-  BigQuery run.
+- **BigQuery Vertex key casing** (`generationConfig`/`thinkingConfig`) is confirmed live: the cloud
+  project sets `max_output_tokens` and `bq_thinking_budget`, and the 2026-09-25 BigQuery pass ran.
 - **`cost_reconciliation`** — **removed** (2026-07-29); can be re-added later over `ai_run_log`.
 - **The embedding metadata surface has full functional parity across all four tiers.** The
   primitives (`content_hash`, `embedding_dimension`, `row_value_not_in`) and the full multi-run

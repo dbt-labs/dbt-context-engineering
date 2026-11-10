@@ -12,8 +12,11 @@
     from {{ ref('signals') }}          -- signal_raw = generate(..., output_schema=schema(...))
 
   `as_type` defaults to the engine's string type; pass a SQL type (e.g. dbt.type_int()) for others.
-  Use text for an UNSTRUCTURED (no output_schema) generation. LIVE-VALIDATION DEFERRED on cloud
-  engines; the default (JSON-string) path is validated on duckdb.
+  Use text for an UNSTRUCTURED (no output_schema) generation. The default (JSON-string)
+  path is executed on duckdb. The Snowflake VARIANT, Databricks JSON-string and BigQuery STRUCT
+  branches were executed live by assert_flatten_conforms and assert_extract_conforms in the
+  2026-09-25 cloud pass, and the Redshift branch in the Redshift pass. Those tests read string
+  fields, so typed casts beyond string are not yet covered on the cloud engines.
 -#}
 {% macro field(ai_result, field, as_type=none) -%}
     {%- set t = as_type if as_type is not none else dbt.type_string() -%}

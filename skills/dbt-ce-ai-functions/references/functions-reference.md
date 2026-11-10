@@ -137,6 +137,6 @@ a `grounded` test (quote check).
   Databricks `classify`/`extract` are bounded by their schema, no separate cap. On BigQuery set
   `var: bq_thinking_budget: 0` for structured tasks. On **Redshift** the cap maps to the UNIFIED
   inference-config `maxTokens` (camelCase, case-sensitive).
-- **generate/extract are beta** in the package (validated but with `LIVE-VALIDATION DEFERRED`
-  aspects); `classify` and `embed` are the most exercised. The **Redshift** AI path (Bedrock via
+- **generate/extract are beta** in the package. They executed live on all four engines, but on
+  sample data only, and structured output on Redshift is best-effort; `classify` and `embed` are the most exercised. The **Redshift** AI path (Bedrock via
   `CREATE EXTERNAL MODEL` inference UDFs) is live-validated end to end.

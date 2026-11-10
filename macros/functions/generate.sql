@@ -6,9 +6,11 @@
         model (optional; defaults to var model_generate).
   Returns a SQL expression usable inside a select.
 
-  LIVE-VALIDATION DEFERRED: the vendor AI function surface is compile-checked per adapter in CI
-  but not executed (no warehouse creds). Argument shapes follow the parity doc / current vendor
-  docs and must be re-confirmed against the vendor at live-validation time.
+  Live status: the vendor AI function surface executed successfully on Snowflake, Databricks and
+  BigQuery in the recorded cloud pass of 2026-09-25 (TESTING.md section 3.3), and on Redshift in
+  the integration_tests/redshift pass. CI only parses these paths, since no job holds warehouse
+  credentials. Structured output is engine-guaranteed on Snowflake and Databricks, schema-shaped
+  with a prompt-injected enum on BigQuery, and best-effort (prompt-enforced) on Redshift.
 -#}
 
 {% macro generate(input_column, prompt, output_schema=none, model=none) -%}

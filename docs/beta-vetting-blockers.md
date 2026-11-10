@@ -117,7 +117,11 @@ Probed the configured Databricks warehouse, which runs the AI functions successf
 - So a check written as "dbr_version >= 15.4" would fail a warehouse that works. The 15.4 LTS requirement applies to all-purpose clusters. SQL warehouses report a `dbsql_version` instead, and the docs give no minimum for it.
 - Nothing in `current_version()` or `version()` says whether a warehouse is SQL Classic, the other documented exclusion.
 - The probe took about 5 seconds warm and 14 seconds with a cold start, per call, which is the per-model cost of enforcing it.
-- An unmet prerequisite could not be reproduced, so the exact error text for it is unrecorded.
+- The same probe on a `databricks-classic` target reports the same shape, so no version field separates Classic from Pro.
+- `ai_query` on the Classic warehouse fails with `[AI_FUNCTION_UNSUPPORTED_ERROR] The function ai_query is not supported in the current environment. It is only available in Databricks SQL Pro and Serverless. SQLSTATE: 56038`. This is a named error, so the earlier "opaque SQL error" premise was wrong for Classic.
+- Databricks lists an upcoming move to DBR 17.3 LTS, which would date a hard-coded floor.
+- Not reproduced: the error from an all-purpose cluster below DBR 15.4.
+- Decision: do not enforce. The macro comment, TESTING.md section 6 and the README row now say so.
 
 ## Caveats on this assessment
 

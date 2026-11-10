@@ -160,7 +160,7 @@ What a clean warehouse pass looks like: every model `OK`, every test `PASS`, and
 `classify` row with `row_count = 10`. Read any failure by its first-column label against the table in
 §5. The **most likely first-run issues** are (a) a wrong `model_*` / embedding var for the account,
 (b) an unmet prerequisite (Databricks needs **DBR 15.4 LTS or above** and is not available on
-Databricks SQL Classic; BigQuery needs the
+Databricks SQL Classic, where the build fails with `AI_FUNCTION_UNSUPPORTED_ERROR`; BigQuery needs the
 AI API enabled), and (c) on BigQuery, a null `signal`/`evidence` in `assert_*_conforms` (run with
 `--target bigquery`) → the STRUCT field-access path has regressed. It was confirmed live on
 2026-09-25, so check the model output before assuming the macro is wrong.
@@ -764,8 +764,8 @@ column names the problem (e.g. `wrong_top_hit`, `bad_accuracy`, `extract_null`).
 
 General cloud red flags: an opaque SQL error at build (not a clean `*` compiler error) usually
 means an **unmet prerequisite**: Databricks on a SQL Classic warehouse or below DBR 15.4 LTS
-(the runtime check is a documented no-op today, so this surfaces as an opaque SQL error rather
-than a named one), or a BigQuery project without the AI API enabled.
+(the runtime check is deliberately not enforced; Classic fails with Databricks' own
+`AI_FUNCTION_UNSUPPORTED_ERROR`, see §6), or a BigQuery project without the AI API enabled.
 
 ---
 
@@ -780,12 +780,14 @@ What remains uncovered or conditional (everything else is now covered on all thr
   as assembled text by `assert_create_vector_index_ddl`. That proves every argument is
   interpolated and the optional clauses appear and disappear with their arguments. It does not
   prove either warehouse accepts the DDL.
-- **The Databricks runtime prerequisite is documented but unenforced.**
-  `require_databricks_ai_runtime()` has an empty body. The real requirement is DBR 15.4 LTS or
-  above and not Databricks SQL Classic. Enforcing it needs a `current_version()` round trip at
-  compile time on every AI-calling model, which is a cost and a design decision, and it cannot be
-  validated without a Databricks warehouse. Until then an unmet prerequisite is an opaque SQL
-  error rather than a named one.
+- **The Databricks runtime prerequisite is deliberately not enforced.**
+  `require_databricks_ai_runtime()` has an empty body. The requirement is DBR 15.4 LTS or above
+  and not Databricks SQL Classic. Probed live on 2026-11-10: a Classic warehouse fails with
+  Databricks' own named error, `AI_FUNCTION_UNSUPPORTED_ERROR` (SQLSTATE 56038). SQL warehouses
+  report no `dbr_version` from `current_version()`, so a DBR check would reject warehouses that
+  work, and no version field separates Classic from Pro. Databricks has also announced a move to
+  DBR 17.3 LTS, which would date a hard-coded floor. Not reproduced: the error from an
+  all-purpose cluster below DBR 15.4.
 - **The cloud suite never runs in CI.** It runs only locally, against your own profile, by
   following §4.11's cloud pass. A `live-battery` job existed until it was deleted: it was gated
   on `workflow_dispatch`, was never once dispatched across 54 recorded runs, and depended on a

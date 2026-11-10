@@ -326,7 +326,7 @@ Part of the surface but rarely called directly as they isolate per-engine diverg
 | `bq_output_schema(json_schema)` | JSON schema → BigQuery `name TYPE` list |
 | `bq_model_params(max_output_tokens, thinking_budget)` | BigQuery `model_params` JSON |
 | `str_literal(s)` | a portable, dispatched SQL string literal (newlines, quotes, backslashes handled per engine) |
-| `require_databricks_ai_runtime()` | placeholder for the Databricks runtime prerequisite (DBR 15.4 LTS or above, not Databricks SQL Classic). **Not implemented**: the macro body is empty, so an unmet prerequisite surfaces as an opaque SQL error rather than a named compiler error |
+| `require_databricks_ai_runtime()` | marker for the Databricks runtime prerequisite (DBR 15.4 LTS or above, not Databricks SQL Classic). **Deliberately not enforced** (see TESTING.md section 6): the macro body is empty, and Databricks itself raises a named `AI_FUNCTION_UNSUPPORTED_ERROR` on a Classic warehouse |
 | `require_redshift_bedrock()` | advisory check (Redshift): the Bedrock inference UDFs must already exist (created via `create_bedrock_function`) before generate/classify/extract/embed/ai_agg run |
 | `require_ai_functions_enabled(fn_name)` / `require_safe_materialization(fn_name)` / `require_full_refresh_gate(fn_name)` | prerequisite checks wired into every AI function: the `ai_functions_enabled` spend gate, the no-`view` rule, and the `allow_full_reembed` full-refresh gate |
 

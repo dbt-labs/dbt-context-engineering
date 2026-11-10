@@ -105,7 +105,7 @@ Step 1 of the TESTING.md section 4.11 cloud pass (`build --full-refresh` with `a
 | Snowflake | PASS=148 ERROR=0 TOTAL=148 |
 | Databricks | PASS=148 ERROR=0 TOTAL=148 |
 | BigQuery | PASS=148 ERROR=0 TOTAL=148 |
-| Redshift | Not run. Connection timed out (`TimeoutError(60)`) before any model built, so nothing was billed. |
+| Redshift | First attempt timed out on connection before any model built (nothing billed). Retried with VPN on: PASS=140 ERROR=0 TOTAL=140 (the Redshift project has no canary or vector index models). |
 
 TOTAL is 148, while TESTING.md section 3.3 still says 145, so that number needs updating. The multi-run delta steps (4.1 and 4.3 to 4.7) and the orphan sequence were not run in this pass.
 

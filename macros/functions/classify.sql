@@ -1,6 +1,6 @@
 {#-
   classify — single-label classification (spec §5.1). Labels come from the output_schema's
-  enum (the taxonomy). output_schema is REQUIRED. LIVE-VALIDATION DEFERRED (see generate).
+  enum (the taxonomy). output_schema is REQUIRED. Live status is recorded in generate.
 
   OUTPUT CONTRACT (normalized 2026-07-29): returns the chosen label as a plain STRING scalar on all
   three engines — NOT the raw per-engine shape. This makes classify output portable and directly

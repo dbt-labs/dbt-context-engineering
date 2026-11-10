@@ -3,7 +3,7 @@
 {#- Flatten extract's structured output to scalars via field, joined to the source text so
     evidence groundedness can be asserted (assert_extract_grounded). The per-engine result
     shape (Snowflake VARIANT object; Databricks JSON string; BigQuery STRUCT) is read uniformly by
-    field. LIVE-VALIDATION DEFERRED. -#}
+    field. Executed live in the baseline passes recorded in TESTING.md. -#}
 select
     e.utterance_id,
     u.utterance_text,

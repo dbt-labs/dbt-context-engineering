@@ -27,7 +27,12 @@
           field tells Classic apart from Pro.
         - A hard-coded DBR floor goes stale when Databricks moves it to 17.3.
         - A check costs a round trip of several seconds per AI-calling model.
-        Not reproduced: the error from an all-purpose cluster below DBR 15.4. -#}
+        All-purpose clusters, probed 2026-11-10: DBR 14.3 builds
+        fail with UNRECOGNIZED_PARAMETER_NAME (ai_query has no modelParameters argument),
+        AI_FUNCTION_UNSUPPORTED_ERROR for ai_classify, and UNRESOLVED_ROUTINE for
+        vector_cosine_similarity. DBR 17.3 passes every AI wrapper; vector_search and
+        embedding_canary need vector_cosine_similarity, which is DBR 18.1 and above on a cluster
+        (passes on 18.2). None of these errors names the runtime version. -#}
 {%- endmacro %}
 
 

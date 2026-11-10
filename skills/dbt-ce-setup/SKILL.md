@@ -81,7 +81,9 @@ are in `references/adapter-config.md`; the essentials:
   needed. If you enable the embedding canary, set `embedding_canary_vector_dimension` (Snowflake
   needs a literal vector dimension).
 - **Databricks:** AI functions require DBR 15.4 LTS or above and are not available on Databricks SQL Classic. 
-  DBR 18.2+ is RECOMMENDED, not required, and Pro is supported.
+  DBR 18.2+ is RECOMMENDED, not required, and Pro is supported. On an all-purpose cluster the
+  wrappers were validated at DBR 17.3 LTS and above, and `vector_search` and `embedding_canary`
+  need 18.1 or above (`vector_cosine_similarity`). SQL warehouses have no such split.
 - **BigQuery:** enable the Vertex AI API. `bq_connection` is optional for interactive queries
   (End-User Credentials cover them) but needed for service-account/batch jobs; `bq_model` is for
   the legacy `ML.*` path only. Set **`bq_thinking_budget: 0`** for structured tasks, Gemini 2.5

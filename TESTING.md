@@ -129,7 +129,7 @@ There is no CI job for this. The cloud suite runs locally, against your own prof
 Expected result: all models build and all **34** `assert_*` tests pass, for
 `TOTAL=152` per target (verified 2026-11-10 on Snowflake, Databricks, and BigQuery under dbt Core 1.12;
 the earlier Core and Fusion runs on 2026-10-02 predate the typed-cast and oversized-group probes).
-The Redshift project's baseline is `TOTAL=144` (verified 2026-11-10). A failure here is meaningful
+The Redshift project's baseline is `TOTAL=145` (verified 2026-11-10, including a Redshift-only `assert_field_malformed_null`). A failure here is meaningful
 — it means a wrapper's dialect is wrong for that account, a model returned nothing, or the AI
 produced an off-taxonomy / ungrounded result. See §5.
 
@@ -160,8 +160,9 @@ dbt build $P --indirect-selection cautious --select tag:version_guard --vars '{t
 What a clean warehouse pass looks like: every model `OK`, every test `PASS`, and the run log holds a
 `classify` row with `row_count = 10`. Read any failure by its first-column label against the table in
 §5. The **most likely first-run issues** are (a) a wrong `model_*` / embedding var for the account,
-(b) an unmet prerequisite (Databricks needs **DBR 15.4 LTS or above** and is not available on
-Databricks SQL Classic, where the build fails with `AI_FUNCTION_UNSUPPORTED_ERROR`; BigQuery needs the
+(b) an unmet prerequisite (Databricks needs **DBR 15.4 LTS or above** (17.3 or above is what the
+wrappers were validated on, and `vector_search` and the canary need 18.1 or above on a cluster) and is
+not available on Databricks SQL Classic, where the build fails with `AI_FUNCTION_UNSUPPORTED_ERROR`; BigQuery needs the
 AI API enabled), and (c) on BigQuery, a null `signal`/`evidence` in `assert_*_conforms` (run with
 `--target bigquery`) → the STRUCT field-access path has regressed. It was confirmed live on
 2026-09-25, so check the model output before assuming the macro is wrong.
@@ -224,6 +225,8 @@ conditionals in `dbt_project.yml`.
 | **Evaluation (P7)** | `eval_metrics` (no AI) | `assert_eval_metrics`, `assert_grounded`, `assert_conforms_catches` | deterministic |
 | **Output accessors** | `flatten` (from `generate`), `generate_text` (LIVE) | `assert_flatten_conforms`, `assert_generate_text` | live |
 | **Group-level aggregation (ADR-0028)** | `ai_agg` (LIVE), guarded by `guard_agg_batch` in a pre_hook | `assert_ai_agg` | live |
+| **Typed field casts** | `typed_generate` (LIVE), `typed_flatten` | `assert_typed_field_casts` | live |
+| **Oversized ai_agg group (probe, off by default)** | `ai_agg_oversized_input`, `ai_agg_oversized` (LIVE) | `assert_ai_agg_oversized` | live, opt-in |
 | **Adversarial fixtures** | `adversarial_docs`, `split_adversarial`, `signals_adversarial` (LIVE) | `assert_split_adversarial`, `assert_signals_adversarial` | live + deterministic |
 | Embedding metadata (content-hash delta, multi-run) | `content_hash_delta_stg`, `content_hash_delta` | `assert_content_hash_delta` (§4.3) | deterministic |
 | Chunk partition delta (multi-run) | `chunk_delta`, `chunk_delta_units` | `assert_chunk_delta` (§4.5) | deterministic |
@@ -719,9 +722,11 @@ Two probes ship in both `integration_tests/cloud` and `integration_tests/redshif
   the raw `result` before blaming `field`.
 - **Oversized `ai_agg` group.** `ai_agg_oversized_input`, `ai_agg_oversized` and
   `assert_ai_agg_oversized` are disabled unless `run_oversized_agg_probe` is true. They build one
-  group of 1000 rows, about 70KB and 17k estimated tokens. Run with
-  `--vars '{ai_functions_enabled: true, run_oversized_agg_probe: true, max_agg_group_tokens: 1000000}'`
-  on Snowflake and BigQuery so the guard does not block their native aggregate. Recorded 2026-11-10:
+  group of 1000 rows, 85,800 characters and about 21,800 estimated tokens by the guard's own
+  formula. Run with
+  `--vars '{ai_functions_enabled: true, run_oversized_agg_probe: true}'`. The default ceiling of
+  100000 does not trip at this size on any engine (the recorded Snowflake and BigQuery runs passed
+  a higher ceiling, which made no difference). Recorded 2026-11-10:
   Snowflake, BigQuery and Databricks build the group, and Redshift fails with
   `Result size exceeds LISTAGG limit`. With `max_agg_group_tokens: 1000`, `guard_agg_batch` raises
   its named error on all four engines before any AI call. This size is far below any model's context
@@ -807,8 +812,15 @@ What remains uncovered or conditional (everything else is now covered on all thr
   Databricks' own named error, `AI_FUNCTION_UNSUPPORTED_ERROR` (SQLSTATE 56038). SQL warehouses
   report no `dbr_version` from `current_version()`, so a DBR check would reject warehouses that
   work, and no version field separates Classic from Pro. Databricks has also announced a move to
-  DBR 17.3 LTS, which would date a hard-coded floor. Not reproduced: the error from an
-  all-purpose cluster below DBR 15.4.
+  DBR 17.3 LTS, which would date a hard-coded floor.
+  All-purpose clusters, probed 2026-11-10 with the cloud baseline: DBR 14.3 passes 127 of 148 and
+  fails `generate`, `extract` and `generate_text` with `UNRECOGNIZED_PARAMETER_NAME` (`ai_query` has
+  no `modelParameters` argument), `classify` with `AI_FUNCTION_UNSUPPORTED_ERROR` for `ai_classify`,
+  and `search` and the canary tests with `UNRESOLVED_ROUTINE` for `vector_cosine_similarity`.
+  DBR 17.3 passes 144 of 148, with every AI wrapper passing and only `search` and the two canary
+  tests failing on the same routine, which is documented as DBR 18.1 and above. On DBR 18.2 those
+  three pass. The `embeddings` table was reused from the 17.3 run, so 18.2 did not get a full
+  baseline, and DBR 15.4 to 16.x is untested. None of these errors names the runtime version.
 - **The cloud suite never runs in CI.** It runs only locally, against your own profile, by
   following §4.11's cloud pass. A `live-battery` job existed until it was deleted: it was gated
   on `workflow_dispatch`, was never once dispatched across 54 recorded runs, and depended on a
@@ -827,8 +839,10 @@ What remains uncovered or conditional (everything else is now covered on all thr
   them plus a scheduled workflow was decided against. A vendor changing a pinned model's output
   is therefore invisible until the next manual cloud pass. This is a constraint on how the
   capability is operated here, not a gap in the suite or in ADR-0026's design.
-- **BigQuery Vertex key casing** (`generationConfig`/`thinkingConfig`) is confirmed live: the cloud
-  project sets `max_output_tokens` and `bq_thinking_budget`, and the 2026-09-25 BigQuery pass ran.
+- **BigQuery Vertex key casing** (`generationConfig`/`thinkingConfig`) was accepted live: the cloud
+  project sets `max_output_tokens` and `bq_thinking_budget`, and the 2026-09-25 and 2026-11-10
+  BigQuery passes ran. A passing build shows the keys were accepted, not that the output cap or
+  thinking budget took effect, which is not independently verified.
 - **`cost_reconciliation`** — **removed** (2026-07-29); can be re-added later over `ai_run_log`.
 - **The embedding metadata surface has full functional parity across all four tiers.** The
   primitives (`content_hash`, `embedding_dimension`, `row_value_not_in`) and the full multi-run

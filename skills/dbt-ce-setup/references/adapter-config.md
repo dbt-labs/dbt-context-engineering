@@ -32,7 +32,7 @@ Notes:
 
 ## Databricks
 
-AI functions (`ai_query`, `ai_classify`) require DBR 15.4 LTS or above and are not available on Databricks SQL Classic. 
+AI functions (`ai_query`, `ai_classify`) require DBR 15.4 LTS or above and are not available on Databricks SQL Classic. On an all-purpose cluster the wrappers were validated at DBR 17.3 LTS and above, and `vector_search` and `embedding_canary` need 18.1 or above. 
 DBR 18.2+ is RECOMMENDED, not required, and Pro is supported.
 
 ```yaml

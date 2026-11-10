@@ -7,7 +7,7 @@
   Returns a SQL expression usable inside a select.
 
   Live status: the vendor AI function surface executed successfully on Snowflake, Databricks and
-  BigQuery in the recorded cloud pass of 2026-09-25 (TESTING.md section 3.3), and on Redshift in
+  BigQuery in the recorded cloud passes of 2026-09-25 and 2026-11-10 (TESTING.md sections 3.3 and 6), and on Redshift in
   the integration_tests/redshift pass. CI only parses these paths, since no job holds warehouse
   credentials. Structured output is engine-guaranteed on Snowflake and Databricks, schema-shaped
   with a prompt-injected enum on BigQuery, and best-effort (prompt-enforced) on Redshift.

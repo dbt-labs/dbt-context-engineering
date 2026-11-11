@@ -1,7 +1,7 @@
 {{ config(materialized='table') }}
 
 {#- Validates the DEFAULT (JSON-string) path of field + text deterministically. Cloud
-    engines return other shapes (VARIANT / STRUCT) — those branches are LIVE-VALIDATION DEFERRED —
+    engines return other shapes (VARIANT / STRUCT) — those branches run live in the cloud project (assert_flatten_conforms) —
     but the default path mirrors a JSON-string result (the Databricks shape) and runs on duckdb. -#}
 with raw as (
     select 'e1' as id, '{"signal": "pain_point", "evidence": "keeps breaking"}' as result

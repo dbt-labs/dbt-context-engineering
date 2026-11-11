@@ -12,8 +12,11 @@
     from {{ ref('signals') }}          -- signal_raw = generate(..., output_schema=schema(...))
 
   `as_type` defaults to the engine's string type; pass a SQL type (e.g. dbt.type_int()) for others.
-  Use text for an UNSTRUCTURED (no output_schema) generation. LIVE-VALIDATION DEFERRED on cloud
-  engines; the default (JSON-string) path is validated on duckdb.
+  Use text for an UNSTRUCTURED (no output_schema) generation. The default (JSON-string)
+  path is executed on duckdb. The Snowflake VARIANT, Databricks JSON-string and BigQuery STRUCT
+  branches were executed live by assert_flatten_conforms and assert_extract_conforms in the
+  2026-09-25 cloud pass, and the Redshift branch in the Redshift pass. The typed-cast probe
+  (assert_typed_field_casts) covers integer, number and boolean casts on all four engines.
 -#}
 {% macro field(ai_result, field, as_type=none) -%}
     {%- set t = as_type if as_type is not none else dbt.type_string() -%}
@@ -33,9 +36,22 @@
 {#- Redshift's Bedrock text UDF returns a JSON STRING (there is no structured/response_format path),
     so read a top-level field with JSON_EXTRACT_PATH_TEXT. Pass each path element as its own quoted
     arg (not a '$.f' JSONPath). Best-effort: if the model didn't return valid JSON this yields null,
-    which is the intended signal, not a hard error. -#}
+    which is the intended signal, not a hard error. The trailing `true` is JSON_EXTRACT_PATH_TEXT's
+    null_if_invalid argument: without it Redshift raises "JSON parsing error" on a reply wrapped in
+    code fences or prose, which would fail the whole build instead of yielding null. A value that
+    parses but cannot be cast to the target type (for example "seven" to integer) still raises. -#}
 {% macro redshift__field(ai_result, field, as_type) -%}
-    cast(json_extract_path_text({{ ai_result }}, '{{ field }}') as {{ as_type }})
+    {#- Redshift cannot cast a text or varchar column to BOOLEAN ("cannot cast type text to
+        boolean", then "character varying to boolean", found by the typed-cast probe). Booleans
+        are mapped from the JSON literal instead. Every other target type casts directly. -#}
+    {%- if 'bool' in (as_type | string | lower) -%}
+    case lower(json_extract_path_text({{ ai_result }}, '{{ field }}', true))
+        when 'true' then true
+        when 'false' then false
+    end
+    {%- else -%}
+    cast(json_extract_path_text({{ ai_result }}, '{{ field }}', true) as {{ as_type }})
+    {%- endif -%}
 {%- endmacro %}
 
 {#- Snowflake AI_COMPLETE(response_format=…) / AI_EXTRACT return a VARIANT OBJECT — path-access it.

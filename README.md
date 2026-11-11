@@ -8,7 +8,7 @@ Context for AI is the next frontier they can own. This package introduces new pa
 
 It is **not** an agent, an MCP server, or a serving layer; it makes the context those systems consume. Everything ships as ordinary dbt models, macros, seeds, and tests, reviewed in PRs, enforced by tests, and traceable in the DAG.
 
-This package is dbt Labs' investment in helping our community level up for AI: a new frontier to push data work toward, and the first design patterns for getting there. We have mapped the capabilities we believe context engineering requires and started building them out. Some are validated end to end on all three engines; others ship as beta while we harden them. That map, and where each piece stands, is in [The capabilities context engineering requires](#the-capabilities-context-engineering-requires) below; the reasoning behind every major choice is recorded in the ADRs in [`adr/`](adr/README.md).
+This package is dbt Labs' investment in helping our community level up for AI: a new frontier to push data work toward, and the first design patterns for getting there. We have mapped the capabilities we believe context engineering requires and started building them out. Some are validated end to end on all four engines; others ship as beta while we harden them. That map, and where each piece stands, is in [The capabilities context engineering requires](#the-capabilities-context-engineering-requires) below; the reasoning behind every major choice is recorded in the ADRs in [`adr/`](adr/README.md).
 
 It is deliberately unfinished. The patterns that matter most will be the ones practitioners prove on real corpora, so we are building this in the open and want the community building it with us.
 
@@ -181,21 +181,22 @@ Semantic search is deliberately the simple route through. Behind it we mapped th
 | Cross-source knowledge base | Unions sources into one shape, so a single search spans systems and cites origins | `knowledge_base` | **Validated** |
 | Groundedness & evaluation | Deterministic tests catching hallucinated quotes, off-taxonomy labels, and accuracy regressions | `grounded`, `conforms_to_schema`, `eval` | **Validated** |
 | Cost governance & audit | Stops oversized batches before they run, gates spend behind an opt-in, caps output spend, and logs what each run consumed | `guard_batch`, `ai_functions_enabled`, `allow_full_reembed`, `dev_sample_filter`, `log_ai_run`, `complete_ai_run`, `max_output_tokens` / `bq_thinking_budget` | **Built** (live cost reconciliation deferred) |
-| Free-form generation | Produces summaries, rewrites, and open answers when no label or field set fits | `generate` | **Beta** |
-| Typed extraction | Pulls facts present in the text into typed fields, each with an evidence quote | `extract` | **Beta** |
-| Portable AI output | Reads a structured AI result back as a plain scalar, identically on every engine | `text`, `field` | **Beta** |
+| Free-form generation | Produces summaries, rewrites, and open answers when no label or field set fits | `generate` | **Validated** |
+| Typed extraction | Pulls facts present in the text into typed fields, each with an evidence quote | `extract` | **Validated** |
+| Portable AI output | Reads a structured AI result back as a plain scalar, identically on every engine | `text`, `field` | **Validated** |
 | Group-level reasoning | Reasons across every row in a group at once, instead of row by row | `ai_agg`, `guard_agg_batch` | **Beta** |
 | Managed / scaled vector index | Opt-in managed index for scale; separately billed, charges while idle, never automatic | `create_vector_index` | **Beta** |
 | Runtime drift monitoring | Re-embeds frozen probes each build, catching a provider silently returning different vectors | `embedding_canary` | **Beta** |
+
+Per-engine notes on the validated rows above. On **Redshift** (Bedrock), `generate`, `extract`, `classify` and the structured side of `field` are **best-effort**: the output shape is prompt-enforced, not engine-guaranteed, so `conforms_to_schema` is how you catch drift ([ADR-0036](adr/0036-redshift-support-bedrock-external-models.md)). On **Databricks**, the AI functions were validated on a SQL warehouse (Databricks supports AI functions on Pro and Serverless; we did not run each tier separately) and on all-purpose clusters at DBR 17.3 LTS; Classic SQL warehouses fail with a named error, and a cluster below the floor fails on `ai_query` parameters and `ai_classify` (tested on 14.3). `vector_search` and `embedding_canary` need `vector_cosine_similarity`, which is DBR 18.1 and above on a cluster (tested on 18.2) and ran on a SQL warehouse. DBR 15.4 to 16.x is untested.
 
 ### Capabilities in beta
 
 These are not extras or afterthoughts. They are capabilities we know context engineering needs, which is why they already ship. They are simply less proven than semantic search — larger surface area, more per-engine divergence, narrower validation — so use them, and expect the edges to move as we and the community harden them.
 
-- **`generate`** / **`extract`**: the other two row-level AI operations. `generate` is free-form generation (plain text or a structured object); `extract` pulls a typed record of fields present in the text. `classify` (the precision unlock above) covers the closed-set-label case; reach for these when you need free text or a multi-field typed extraction. See [ADR-0010](adr/0010-four-ai-operations.md). Read structured results back portably with `text()` / `field()` ([ADR-0008](adr/0008-normalizing-ai-output.md)).
-- **`ai_agg`**: group-level aggregation (summarize a whole transcript, roll up sentiment across an account). Cross-adapter behavior diverges the most here; pair with `guard_agg_batch` on Databricks. See [ADR-0028](adr/0028-add-ai-agg-group-level-aggregation.md).
-- **`create_vector_index`**: opt-in, `dbt run-operation` **only** (never a model). Builds the engine's external, separately-billed index/service (Snowflake Cortex Search, BigQuery vector index; Databricks via its Vector Search API) for scale beyond the brute-force default. Stateful, with idle-serving cost, so drop it explicitly. Not supported on Redshift (its scale path is an external service — S3 Vectors / OpenSearch — not SQL DDL). See [ADR-0005](adr/0005-retrieval-brute-force-default-index-opt-in.md).
-- **`embedding_canary`**: runtime drift monitor. Re-embeds a small fixed probe set and compares it against a blessed baseline by cosine similarity, catching a provider silently changing a pinned model's behavior. **Disabled by default** (`monitoring: +enabled: false`); it makes real `embed()` calls, so add it only to a scheduled production job. Its baseline seed ships disabled the same way, so turning the monitor on also means setting `seeds: dbt_context_engineering: +enabled: true`, or `dbt build`/`dbt seed` won't have the baseline to compare against. See [ADR-0026](adr/0026-embedding-canary-runtime-drift-monitor.md).
+- **`ai_agg`**: group-level aggregation (summarize a whole transcript, roll up sentiment across an account). Cross-adapter behavior diverges the most here; pair with `guard_agg_batch` on Databricks. **Remaining blocker:** the divergence is by design (`model` is a no-op on Snowflake, `order_column` on BigQuery), Databricks and Redshift have no map-reduce for an oversized group, and Redshift fails at its 64KB `LISTAGG` limit. A 1000-row group built on the other three engines, and the guard trips on all four, but no group near a model's real context limit has been run. See [ADR-0028](adr/0028-add-ai-agg-group-level-aggregation.md).
+- **`create_vector_index`**: opt-in, `dbt run-operation` **only** (never a model). Builds the engine's external, separately-billed index/service (Snowflake Cortex Search, BigQuery vector index; Databricks via its Vector Search API) for scale beyond the brute-force default. Stateful, with idle-serving cost, so drop it explicitly. Not supported on Redshift (its scale path is an external service — S3 Vectors / OpenSearch — not SQL DDL). **Remaining blocker:** the live create, query and drop cycle has never run (DDL assembly is tested, not accepted by a warehouse), Databricks raises because its index is an API and not SQL, and Redshift is unsupported. See [ADR-0005](adr/0005-retrieval-brute-force-default-index-opt-in.md).
+- **`embedding_canary`**: runtime drift monitor. Re-embeds a small fixed probe set and compares it against a blessed baseline by cosine similarity, catching a provider silently changing a pinned model's behavior. **Disabled by default** (`monitoring: +enabled: false`); it makes real `embed()` calls, so add it only to a scheduled production job. Its baseline seed ships disabled the same way, so turning the monitor on also means setting `seeds: dbt_context_engineering: +enabled: true`, or `dbt build`/`dbt seed` won't have the baseline to compare against. **Remaining blocker:** nothing runs it on a schedule, no recorded case shows it catching a real model change, and Redshift raises. See [ADR-0026](adr/0026-embedding-canary-runtime-drift-monitor.md).
 
 ---
 
@@ -209,7 +210,7 @@ A practice does not get defined by one package or one vendor. We have shipped th
 
 ## Status & testing
 
-Every capability in the table above is built. The cloud AI calls (`generate`, `classify`, `extract`, `embed`, `vector_search`) have executed successfully on Snowflake, Databricks, BigQuery, and Redshift (Amazon Bedrock) against **sample data** — the Redshift surface was run end-to-end live (see `integration_tests/redshift/`) — and chunking, prompt resolution/rendering, the cost guard, and the AI run log execute **deterministically on duckdb**. On Redshift, structured output (`classify`/`extract`) is **best-effort** (prompt-enforced, not engine-guaranteed), and `create_vector_index` + `embedding_canary` are unsupported (see [ADR-0036](adr/0036-redshift-support-bedrock-external-models.md)). Not yet validated: real production data at scale, and cost reconciliation against engine usage tables.
+Every capability in the table above is built. The cloud AI calls (`generate`, `classify`, `extract`, `embed`, `vector_search`) have executed successfully on Snowflake, Databricks, BigQuery, and Redshift (Amazon Bedrock) against **sample data** — the Redshift surface was run end-to-end live (see `integration_tests/redshift/`) — and chunking, prompt resolution/rendering, the cost guard, and the AI run log execute **deterministically on duckdb**. On Redshift, structured output (`classify`/`extract`) is **best-effort** (prompt-enforced, not engine-guaranteed), and `create_vector_index` + `embedding_canary` are unsupported (see [ADR-0036](adr/0036-redshift-support-bedrock-external-models.md)). `text`, `field`, `generate` and `extract` were re-run on all four engines on 2026-11-10 (baseline builds of 152 nodes on Snowflake, Databricks and BigQuery, 145 on Redshift), including integer, number and boolean `field` casts, and `guard_agg_batch` was run against real warehouse token estimates. The multi-run delta and orphan sequences were not repeated in that pass. Not yet validated: real production data at scale, and cost reconciliation against engine usage tables.
 
 **How to run the tests in each environment, and what to check, is in** [`TESTING.md`](TESTING.md)**. The *why* behind each design choice is recorded as ADRs in** [`adr/`](adr/README.md)**.**
 
@@ -291,7 +292,7 @@ Every public object. All are called **package-qualified** (`dbt_context_engineer
 
 **`no_oversized_chunks`** *(generic test)*: attach in `schema.yml` to `chunk()`'s `exceeds_target` column; fails any row where it's `true`. Opt-in (a data-quality signal about the source corpus, not a package bug), the same way `grounded` is opt-in.
 
-### Beta (required capabilities, in progress)
+#### Generation and extraction
 
 **`generate(input_column, prompt, output_schema=none, model=none)`**: free-form generation; plain text, or a structured object if you pass `output_schema`.
 
@@ -300,6 +301,8 @@ Every public object. All are called **package-qualified** (`dbt_context_engineer
 **`text(ai_result)`**: plain text of an **unstructured** `generate`.
 
 **`field(ai_result, field, as_type=none)`**: one field out of a **structured** result (`generate` with a schema, or `extract`), cast to `as_type`. Flatten with this before `conforms_to_schema`.
+
+### Beta (required capabilities, in progress)
 
 **`ai_agg(input_column, prompt, order_column=none, model=none)`**: group-level aggregation across a `GROUP BY` group. `prompt` is a plain instruction string, not a template. Cross-adapter behavior diverges; pair with `guard_agg_batch` on Databricks.
 
@@ -326,7 +329,7 @@ Part of the surface but rarely called directly as they isolate per-engine diverg
 | `bq_output_schema(json_schema)` | JSON schema → BigQuery `name TYPE` list |
 | `bq_model_params(max_output_tokens, thinking_budget)` | BigQuery `model_params` JSON |
 | `str_literal(s)` | a portable, dispatched SQL string literal (newlines, quotes, backslashes handled per engine) |
-| `require_databricks_ai_runtime()` | placeholder for the Databricks runtime prerequisite (DBR 15.4 LTS or above, not Databricks SQL Classic). **Not implemented**: the macro body is empty, so an unmet prerequisite surfaces as an opaque SQL error rather than a named compiler error |
+| `require_databricks_ai_runtime()` | marker for the Databricks runtime prerequisite (DBR 15.4 LTS or above, not Databricks SQL Classic). **Deliberately not enforced** ([ADR-0037](adr/0037-databricks-runtime-prerequisite-not-enforced.md)): the macro body is empty, and Databricks itself raises a named `AI_FUNCTION_UNSUPPORTED_ERROR` on a Classic warehouse |
 | `require_redshift_bedrock()` | advisory check (Redshift): the Bedrock inference UDFs must already exist (created via `create_bedrock_function`) before generate/classify/extract/embed/ai_agg run |
 | `require_ai_functions_enabled(fn_name)` / `require_safe_materialization(fn_name)` / `require_full_refresh_gate(fn_name)` | prerequisite checks wired into every AI function: the `ai_functions_enabled` spend gate, the no-`view` rule, and the `allow_full_reembed` full-refresh gate |
 

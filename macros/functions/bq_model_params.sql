@@ -18,8 +18,8 @@
   blowup like this — this is the output-side control.
 
   Emits camelCase keys (Vertex request-body convention: generationConfig / maxOutputTokens /
-  thinkingConfig / thinkingBudget). LIVE-VALIDATION DEFERRED: re-confirm exact key casing against
-  the vendor at live-validation time (see generate).
+  thinkingConfig / thinkingBudget). The cloud integration project sets max_output_tokens and
+  bq_thinking_budget, and the camelCase keys were accepted live on BigQuery in the 2026-09-25 pass (the effect of the cap and budget is not independently verified).
 -#}
 {% macro bq_model_params(max_output_tokens=none, thinking_budget=none) -%}
     {%- set gen = [] -%}

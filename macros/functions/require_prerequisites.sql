@@ -12,19 +12,27 @@
 
 
 {% macro require_databricks_ai_runtime() -%}
-    {#- NOT IMPLEMENTED. The body is empty. The macro exists so the prerequisite is visible at
-        the point where it would be enforced, rather than living only in prose.
+    {#- DELIBERATELY NOT ENFORCED (ADR-0037). The body is empty and the macro stays as the call-site marker.
 
         The prerequisite, per Databricks' own docs: AI functions require DBR 15.4 LTS or above
         and are not available on Databricks SQL Classic. DBR 18.2+ is RECOMMENDED, not required,
-        and Pro is supported.
+        and Pro is supported. Databricks also lists an upcoming change to DBR 17.3 LTS or above.
 
-        Enforcing it needs a live `select current_version()` round trip at compile time on every
-        AI-calling model, which is a cost and a design decision rather than a mechanical fix, and
-        it cannot be validated without a Databricks warehouse. Until that lands, an unmet
-        prerequisite surfaces as an opaque SQL error at build time rather than a compiler error
-        naming the cause. See README.md's macro reference and TESTING.md §5's
-        `assert_wrappers_nonnull` row for the manual cross-check that stands in. -#}
+        Why there is no check, probed live on 2026-11-10:
+        - SQL Classic already fails with a named Databricks error, not an opaque one:
+          [AI_FUNCTION_UNSUPPORTED_ERROR] The function `ai_query` is not supported in the current
+          environment. It is only available in Databricks SQL Pro and Serverless. (SQLSTATE 56038)
+        - SQL warehouses, Classic and Pro alike, report `dbsql_version` from current_version() and
+          no `dbr_version`, so a DBR comparison would fail warehouses that work, and no version
+          field tells Classic apart from Pro.
+        - A hard-coded DBR floor goes stale when Databricks moves it to 17.3.
+        - A check costs a round trip of several seconds per AI-calling model.
+        All-purpose clusters, probed 2026-11-10: DBR 14.3 builds
+        fail with UNRECOGNIZED_PARAMETER_NAME (ai_query has no modelParameters argument),
+        AI_FUNCTION_UNSUPPORTED_ERROR for ai_classify, and UNRESOLVED_ROUTINE for
+        vector_cosine_similarity. DBR 17.3 passes every AI wrapper; vector_search and
+        embedding_canary need vector_cosine_similarity, which is DBR 18.1 and above on a cluster
+        (passes on 18.2). None of these errors names the runtime version. -#}
 {%- endmacro %}
 
 

@@ -1,7 +1,7 @@
 {#-
   extract — typed extraction into the fields defined by output_schema (spec §5.1).
   Same signature as generate; output_schema is REQUIRED (it is the extraction contract, and
-  should include an evidence/quote field for lineage). LIVE-VALIDATION DEFERRED (see generate).
+  should include an evidence/quote field for lineage). Live status is recorded in generate.
 -#}
 
 {% macro extract(input_column, prompt=none, output_schema=none, model=none) -%}

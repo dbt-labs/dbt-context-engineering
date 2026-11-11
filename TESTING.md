@@ -33,7 +33,7 @@ mkdir -p target   # duckdb writes its file relative to CWD; ensure the dir exist
 dbt build --project-dir integration_tests/duckdb --profiles-dir integration_tests/duckdb --full-refresh
 ```
 
-Expected result: **`Done. PASS=201 WARN=0 ERROR=0 SKIP=0`**, verified 2026-09-24. The count grows
+Expected result: **`Done. PASS=206 WARN=0 ERROR=0 SKIP=0`**, verified 2026-11-10. The count grows
 as tests are added, so treat the run summary as the source of truth rather than this number.
 
 > ⚠️ **Always pass `--full-refresh`.** Several tests are phase-parameterized and read their
@@ -126,9 +126,10 @@ dbt build --project-dir integration_tests/cloud --target bigquery --full-refresh
 There is no CI job for this. The cloud suite runs locally, against your own profile, by following
 §4's cloud pass.
 
-Expected result: all models build and all **33** `assert_*` tests pass, for
-`TOTAL=145` per target (verified 2026-10-02 on Snowflake, Databricks, and BigQuery, under both
-dbt Core and dbt Fusion). A failure here is meaningful
+Expected result: all models build and all **34** `assert_*` tests pass, for
+`TOTAL=152` per target (verified 2026-11-10 on Snowflake, Databricks, and BigQuery under dbt Core 1.12;
+the earlier Core and Fusion runs on 2026-10-02 predate the typed-cast and oversized-group probes).
+The Redshift project's baseline is `TOTAL=145` (verified 2026-11-10, including a Redshift-only `assert_field_malformed_null`). A failure here is meaningful
 — it means a wrapper's dialect is wrong for that account, a model returned nothing, or the AI
 produced an off-taxonomy / ungrounded result. See §5.
 
@@ -159,11 +160,13 @@ dbt build $P --indirect-selection cautious --select tag:version_guard --vars '{t
 What a clean warehouse pass looks like: every model `OK`, every test `PASS`, and the run log holds a
 `classify` row with `row_count = 10`. Read any failure by its first-column label against the table in
 §5. The **most likely first-run issues** are (a) a wrong `model_*` / embedding var for the account,
-(b) an unmet prerequisite (Databricks needs **DBR 15.4 LTS or above** and is not available on
-Databricks SQL Classic; BigQuery needs the
+(b) an unmet prerequisite (Databricks needs **DBR 15.4 LTS or above** (17.3 or above is what the
+wrappers were validated on, and `vector_search` and the canary need 18.1 or above on a cluster) and is
+not available on Databricks SQL Classic, where the build fails with `AI_FUNCTION_UNSUPPORTED_ERROR`; BigQuery needs the
 AI API enabled), and (c) on BigQuery, a null `signal`/`evidence` in `assert_*_conforms` (run with
-`--target bigquery`) → the STRUCT field-access assumption needs adjusting (ping me with the row and I'll
-fix the one line).
+`--target bigquery`) → either the STRUCT field-access path has regressed, or the model left that
+field out of its answer. Read the raw `result` first (`to_json_string(result)`); the access path was
+confirmed live on 2026-09-25.
 
 ---
 
@@ -223,6 +226,8 @@ conditionals in `dbt_project.yml`.
 | **Evaluation (P7)** | `eval_metrics` (no AI) | `assert_eval_metrics`, `assert_grounded`, `assert_conforms_catches` | deterministic |
 | **Output accessors** | `flatten` (from `generate`), `generate_text` (LIVE) | `assert_flatten_conforms`, `assert_generate_text` | live |
 | **Group-level aggregation (ADR-0028)** | `ai_agg` (LIVE), guarded by `guard_agg_batch` in a pre_hook | `assert_ai_agg` | live |
+| **Typed field casts** | `typed_generate` (LIVE), `typed_flatten` | `assert_typed_field_casts` | live |
+| **Oversized ai_agg group (probe, off by default)** | `ai_agg_oversized_input`, `ai_agg_oversized` (LIVE) | `assert_ai_agg_oversized` | live, opt-in |
 | **Adversarial fixtures** | `adversarial_docs`, `split_adversarial`, `signals_adversarial` (LIVE) | `assert_split_adversarial`, `assert_signals_adversarial` | live + deterministic |
 | Embedding metadata (content-hash delta, multi-run) | `content_hash_delta_stg`, `content_hash_delta` | `assert_content_hash_delta` (§4.3) | deterministic |
 | Chunk partition delta (multi-run) | `chunk_delta`, `chunk_delta_units` | `assert_chunk_delta` (§4.5) | deterministic |
@@ -647,7 +652,7 @@ Fusion, which changes what you are testing without saying so.
 
 | # | Step | Assumes | Pass looks like |
 |---|---|---|---|
-| 1 | Full-refresh baseline: `$DBT build $D --full-refresh` | anything | `PASS=201` |
+| 1 | Full-refresh baseline: `$DBT build $D --full-refresh` | anything | `PASS=206` |
 | 2 | §4.1 version guard, v1 then v2 | step 1 | both runs green |
 | 3 | §4.10 `vg_adopt` adoption | step 1 | second run green, v1 stamped |
 | 4 | §4.2 `logged_delta` phase 2 | step 1 | `row_count = 5` |
@@ -673,21 +678,21 @@ database inconsistent:
 ```bash
 $DBT build $D --indirect-selection cautious --full-refresh \
   --select orphan_chunks orphan_embeddings --vars '{oc_target_tokens: 20}'
-$DBT build $D --full-refresh          # back to PASS=201
+$DBT build $D --full-refresh          # back to PASS=206
 ```
 
 #### cloud pass (real AI calls, run once per target)
 
 | # | Step | Assumes | Pass looks like |
 |---|---|---|---|
-| 1 | Full-refresh baseline: `$DBT build $C --full-refresh --vars '{ai_functions_enabled: true}'` | anything | `TOTAL=145`, ideally `PASS=145` |
+| 1 | Full-refresh baseline: `$DBT build $C --full-refresh --vars '{ai_functions_enabled: true}'` | anything | `TOTAL=152`, ideally `PASS=152` |
 | 2 | §4.1 version guard, v1 then v2 | step 1 | both runs green |
 | 3 | §4.3 content-hash delta phase 2 | a *fresh* step 1 | `row_count = 1` |
 | 4 | §4.5 chunk partition delta phase 2 | step 1 | per §4.5 |
 | 5 | §4.6 attach_metadata delta phase 2 | step 1 | per §4.6 |
 | 6 | §4.7 knowledge_base per-arm delta phase 2 | step 1 | per §4.7 |
 | 7 | §4.4 orphan sequence | step 1 | the `relationships` test **FAILS** |
-| 8 | **Cleanup rebuild (mandatory)** | step 7 | `TOTAL=145` again |
+| 8 | **Cleanup rebuild (mandatory)** | step 7 | `TOTAL=152` again |
 
 §4.1's cloud half used to run in a CI job. That job is gone (it never once executed and depended
 on a repo secret that never existed), so this pass is now the only thing covering it.
@@ -706,6 +711,28 @@ $DBT build $C --full-refresh --vars '{ai_functions_enabled: true}'
 
 The pass is complete when the final rebuild is clean. Do not leave a warehouse mid-sequence.
 
+#### Optional probes (hub #178)
+
+Two probes ship in both `integration_tests/cloud` and `integration_tests/redshift`.
+
+- **Typed casts.** `typed_generate`, `typed_flatten` and `assert_typed_field_casts` run in the
+  baseline. One structured `generate` call with an integer, a number and a boolean field, read back
+  through `field(..., as_type=...)`. The prompt pins the values (7, 0.25, true), so a failing row
+  means a broken cast path or a model that dropped a field. On BigQuery, `AI.GENERATE` does not force
+  required fields, and an earlier, vaguer prompt got a null `flag` because Gemini omitted it. Read
+  the raw `result` before blaming `field`.
+- **Oversized `ai_agg` group.** `ai_agg_oversized_input`, `ai_agg_oversized` and
+  `assert_ai_agg_oversized` are disabled unless `run_oversized_agg_probe` is true. They build one
+  group of 1000 rows, 85,800 characters and about 21,800 estimated tokens by the guard's own
+  formula. Run with
+  `--vars '{ai_functions_enabled: true, run_oversized_agg_probe: true}'`. The default ceiling of
+  100000 does not trip at this size on any engine (the recorded Snowflake and BigQuery runs passed
+  a higher ceiling, which made no difference). Recorded 2026-11-10:
+  Snowflake, BigQuery and Databricks build the group, and Redshift fails with
+  `Result size exceeds LISTAGG limit`. With `max_agg_group_tokens: 1000`, `guard_agg_batch` raises
+  its named error on all four engines before any AI call. This size is far below any model's context
+  window, so it does not exercise Snowflake and BigQuery's internal map-reduce.
+
 ---
 
 ## 5. What to look out for in the results
@@ -719,12 +746,12 @@ column names the problem (e.g. `wrong_top_hit`, `bad_accuracy`, `extract_null`).
 | `assert_grounded`, `grounded` generic | 0 rows | A returned row = a quote that is **not** a substring of its source after case/whitespace normalization → `contains`/`collapse_ws`/`norm_text` mis-rendered for this dialect (e.g. BigQuery raw-string regex, Snowflake's 4th-arg gotcha). |
 | `assert_conforms_catches` | 0 rows | `schema_enum` failed to resolve the taxonomy, or `IN (...)` list built wrong. |
 | `assert_search` (LIVE) | 0 rows | `wrong_count` ≠ 3 → `top_k`/`VECTOR_SEARCH` wiring off (watch **BigQuery's** divergent table-function path). `not_descending` → ordering/score sign wrong (BigQuery uses `1 - distance`). `score_out_of_range` → not cosine. `wrong_top_hit` → the near-identical utterance didn't rank #1 → **embedding quality / wrong embedding model**, or query embedded with a different model than the corpus. |
-| `assert_flatten_conforms` (LIVE) | 0 rows | A row = the flattened `signal` is null or off-taxonomy. Null → `field` path wrong for this engine's output shape (VARIANT `:` / STRUCT `.` / JSON `get_json_object`). Off-taxonomy value → the model ignored the schema (most likely on **BigQuery**, where the enum is prompt-constrained only, not schema-enforced). |
-| `assert_generate_text` (LIVE) | 0 rows | Empty/null text → `text` didn't extract the payload — watch **BigQuery's** `(...).result` struct access. |
+| `assert_flatten_conforms` (LIVE) | 0 rows | A row = the flattened `signal` is null or off-taxonomy. Null → `field` path wrong for this engine's output shape (VARIANT `:` / STRUCT `.` / JSON `get_json_object`), or the model omitted the field; read the raw `result` first. Off-taxonomy value → the model ignored the schema (most likely on **BigQuery**, where the enum is prompt-constrained only, not schema-enforced). |
+| `assert_generate_text` (LIVE) | 0 rows | Empty/null text → `text` didn't extract the payload, or the model returned nothing; watch **BigQuery's** `(...).result` struct access, and read the raw `result` first. |
 | `assert_wrappers_nonnull` (LIVE) | 0 rows | `<wrapper>_null` → that wrapper returned nothing on this account (bad endpoint/model var, content filter, unsupported warehouse tier). Cross-check the model var and the prerequisite (Databricks: DBR 15.4 LTS+, not on SQL Classic). **On Snowflake a null can also be transient**: see the note below this table. |
 | `assert_embeddings_nonempty` (LIVE) | 0 rows | `embed_empty` → `embed` returned a zero-length vector and the `embeddings` model still reported success. Seen on BigQuery's `AI.EMBED`, most likely from throttling, on a build that ran about three times slower than a clean one. Left unchecked, it surfaces in `search` as an opaque dimension-mismatch error that reads like a `vector_search` bug. `embed_null` → the same row `assert_wrappers_nonnull` reports. Like the Snowflake transient null below, this is a rebuild-and-retest case: rebuild `embeddings`, then test again. The same rows failing again means it is not transient. |
-| `assert_signals_conform` (LIVE) | 0 rows | A row = `classify`'s normalized scalar label is null or off-taxonomy. Null → the per-engine unwrap is wrong (Snowflake `:labels[0]` / BigQuery `.<field>`) — see §6. Off-taxonomy → the model ignored the label set. |
-| `assert_extract_conforms` (LIVE) | 0 rows | A row = the flattened extract `signal` is null or off-taxonomy. Null → the `field` path is wrong for this engine's extract shape (Snowflake's `:response` envelope is unwrapped in the wrapper; if BigQuery returns null, its STRUCT field access is wrong). |
+| `assert_signals_conform` (LIVE) | 0 rows | A row = `classify`'s normalized scalar label is null or off-taxonomy. Null → the per-engine unwrap is wrong (Snowflake `:labels[0]` / BigQuery `.<field>`) or the model omitted the field; read the raw `result` first, see §6. Off-taxonomy → the model ignored the label set. |
+| `assert_extract_conforms` (LIVE) | 0 rows | A row = the flattened extract `signal` is null or off-taxonomy. Null → the `field` path is wrong for this engine's extract shape (Snowflake's `:response` envelope is unwrapped in the wrapper; if BigQuery returns null, its STRUCT field access is wrong or the model omitted the field, so read the raw `result` first). |
 | `assert_extract_grounded` (LIVE, behavioral) | 0 rows | A row = the model returned an evidence quote that is **not** in the source utterance (a hallucinated quote). This surfaces real extraction quality — it can legitimately fail if the model paraphrases instead of quoting verbatim; investigate the row before assuming a code bug. |
 | `assert_kb` (LIVE) | 0 rows | `bad_row_count` (≠20) or `missing_source_type` → `knowledge_base`'s union/normalization didn't run as expected on this engine. `null_lineage_or_shape` → a common-shape column (source_id / account_key / embedding / text / source_type) came out null. |
 | `assert_run_log` (LIVE) | 0 rows | `no_classify_row` → `log_ai_run`'s post-hook INSERT never landed (hook error / ordering). `bad_values` → `row_count`≠10, `est_tokens` null/≤0, or `run_at` null → a cross-engine cast/typing problem in the log INSERT (the classic BigQuery pitfall). |
@@ -764,8 +791,8 @@ column names the problem (e.g. `wrong_top_hit`, `bad_accuracy`, `extract_null`).
 
 General cloud red flags: an opaque SQL error at build (not a clean `*` compiler error) usually
 means an **unmet prerequisite**: Databricks on a SQL Classic warehouse or below DBR 15.4 LTS
-(the runtime check is a documented no-op today, so this surfaces as an opaque SQL error rather
-than a named one), or a BigQuery project without the AI API enabled.
+(the runtime check is deliberately not enforced; Classic fails with Databricks' own
+`AI_FUNCTION_UNSUPPORTED_ERROR`, see §6), or a BigQuery project without the AI API enabled.
 
 ---
 
@@ -780,12 +807,21 @@ What remains uncovered or conditional (everything else is now covered on all thr
   as assembled text by `assert_create_vector_index_ddl`. That proves every argument is
   interpolated and the optional clauses appear and disappear with their arguments. It does not
   prove either warehouse accepts the DDL.
-- **The Databricks runtime prerequisite is documented but unenforced.**
-  `require_databricks_ai_runtime()` has an empty body. The real requirement is DBR 15.4 LTS or
-  above and not Databricks SQL Classic. Enforcing it needs a `current_version()` round trip at
-  compile time on every AI-calling model, which is a cost and a design decision, and it cannot be
-  validated without a Databricks warehouse. Until then an unmet prerequisite is an opaque SQL
-  error rather than a named one.
+- **The Databricks runtime prerequisite is deliberately not enforced** ([ADR-0037](adr/0037-databricks-runtime-prerequisite-not-enforced.md)).
+  `require_databricks_ai_runtime()` has an empty body. The requirement is DBR 15.4 LTS or above
+  and not Databricks SQL Classic. Probed live on 2026-11-10: a Classic warehouse fails with
+  Databricks' own named error, `AI_FUNCTION_UNSUPPORTED_ERROR` (SQLSTATE 56038). SQL warehouses
+  report no `dbr_version` from `current_version()`, so a DBR check would reject warehouses that
+  work, and no version field separates Classic from Pro. Databricks has also announced a move to
+  DBR 17.3 LTS, which would date a hard-coded floor.
+  All-purpose clusters, probed 2026-11-10 with the cloud baseline: DBR 14.3 passes 127 of 148 and
+  fails `generate`, `extract` and `generate_text` with `UNRECOGNIZED_PARAMETER_NAME` (`ai_query` has
+  no `modelParameters` argument), `classify` with `AI_FUNCTION_UNSUPPORTED_ERROR` for `ai_classify`,
+  and `search` and the canary tests with `UNRESOLVED_ROUTINE` for `vector_cosine_similarity`.
+  DBR 17.3 passes 144 of 148, with every AI wrapper passing and only `search` and the two canary
+  tests failing on the same routine, which is documented as DBR 18.1 and above. On DBR 18.2 those
+  three pass. The `embeddings` table was reused from the 17.3 run, so 18.2 did not get a full
+  baseline, and DBR 15.4 to 16.x is untested. None of these errors names the runtime version.
 - **The cloud suite never runs in CI.** It runs only locally, against your own profile, by
   following §4.11's cloud pass. A `live-battery` job existed until it was deleted: it was gated
   on `workflow_dispatch`, was never once dispatched across 54 recorded runs, and depended on a
@@ -794,17 +830,22 @@ What remains uncovered or conditional (everything else is now covered on all thr
 - **Some live tests are behavioral, not deterministic gates.** `assert_search` (top-hit ranking),
   the `*_conforms_*` checks, and `assert_extract_grounded` depend on live model output, so they can
   fail from model nondeterminism rather than a code bug. Read a failing row before assuming a regression.
-- **BigQuery classify/extract STRUCT field access is assumed-from-docs** (Snowflake + Databricks
-  shapes are confirmed as of 2026-07-29). `assert_signals_conform` / `assert_extract_conforms` (on `--target bigquery`)
-  are the confirmation — a **null** result means the `.<field>` path is wrong for BigQuery.
+- **BigQuery classify/extract STRUCT field access is confirmed live** (2026-09-25: the cloud suite
+  ran 144 of 144 on BigQuery, including `assert_signals_conform` and `assert_extract_conforms`).
+  A **null** from either on `--target bigquery` has two possible causes: the `.<field>` path is
+  wrong, or the model omitted the field (`AI.GENERATE` does not force required fields, and this
+  happened once with a vaguer typed-cast prompt). Inspect the raw `result` before changing the macro.
+  The two tests remain the regression check.
 - **Drift detection is bounded by how often someone runs the cloud pass.** `embedding_canary`
   finds provider drift by comparing runs spaced apart in time, and nothing runs it on a
   schedule: no CI job reaches a warehouse, the repository holds no Actions secrets, and adding
   them plus a scheduled workflow was decided against. A vendor changing a pinned model's output
   is therefore invisible until the next manual cloud pass. This is a constraint on how the
   capability is operated here, not a gap in the suite or in ADR-0026's design.
-- **BigQuery Vertex key casing** (`generationConfig`/`thinkingConfig`) — re-confirm on the first live
-  BigQuery run.
+- **BigQuery Vertex key casing** (`generationConfig`/`thinkingConfig`) was accepted live: the cloud
+  project sets `max_output_tokens` and `bq_thinking_budget`, and the 2026-09-25 and 2026-11-10
+  BigQuery passes ran. A passing build shows the keys were accepted, not that the output cap or
+  thinking budget took effect, which is not independently verified.
 - **`cost_reconciliation`** — **removed** (2026-07-29); can be re-added later over `ai_run_log`.
 - **The embedding metadata surface has full functional parity across all four tiers.** The
   primitives (`content_hash`, `embedding_dimension`, `row_value_not_in`) and the full multi-run

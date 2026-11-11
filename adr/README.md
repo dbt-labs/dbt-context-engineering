@@ -48,6 +48,7 @@ just record the choice.
 | [0034](0034-run-log-target-ownership-under-deferral.md) | Keep the AI run log in the current target under state deferral | Accepted |
 | [0035](0035-per-call-token-estimate-for-the-guard-and-the-log.md) | Estimate the whole AI call per row, with the prompt named once in model meta | Accepted |
 | [0036](0036-redshift-support-bedrock-external-models.md) | Redshift support: Bedrock inference UDFs, best-effort structured output, pure-SQL cosine | Accepted |
+| [0037](0037-databricks-runtime-prerequisite-not-enforced.md) | The Databricks runtime prerequisite is documented, not enforced | Accepted |
 
 ## New here? A reading path
 

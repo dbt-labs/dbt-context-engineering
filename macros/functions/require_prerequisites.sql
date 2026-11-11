@@ -12,7 +12,7 @@
 
 
 {% macro require_databricks_ai_runtime() -%}
-    {#- DELIBERATELY NOT ENFORCED. The body is empty and the macro stays as the call-site marker.
+    {#- DELIBERATELY NOT ENFORCED (ADR-0037). The body is empty and the macro stays as the call-site marker.
 
         The prerequisite, per Databricks' own docs: AI functions require DBR 15.4 LTS or above
         and are not available on Databricks SQL Classic. DBR 18.2+ is RECOMMENDED, not required,

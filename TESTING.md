@@ -806,7 +806,7 @@ What remains uncovered or conditional (everything else is now covered on all thr
   as assembled text by `assert_create_vector_index_ddl`. That proves every argument is
   interpolated and the optional clauses appear and disappear with their arguments. It does not
   prove either warehouse accepts the DDL.
-- **The Databricks runtime prerequisite is deliberately not enforced.**
+- **The Databricks runtime prerequisite is deliberately not enforced** ([ADR-0037](adr/0037-databricks-runtime-prerequisite-not-enforced.md)).
   `require_databricks_ai_runtime()` has an empty body. The requirement is DBR 15.4 LTS or above
   and not Databricks SQL Classic. Probed live on 2026-11-10: a Classic warehouse fails with
   Databricks' own named error, `AI_FUNCTION_UNSUPPORTED_ERROR` (SQLSTATE 56038). SQL warehouses

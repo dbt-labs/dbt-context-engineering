@@ -1,6 +1,6 @@
 # What blocks each beta capability from being fully vetted
 
-This assessment covers the six capabilities the README marks **Beta**. It is derived from the README maturity definitions, `TESTING.md` section 6, ADR-0010, ADR-0026, ADR-0028, ADR-0036, the `LIVE-VALIDATION DEFERRED` markers in `macros/` and `models/`, and the test inventory under `integration_tests/` and `.github/workflows/ci.yml`. It reflects the repository at commit `cbf22ec`.
+This assessment covers the six capabilities the README marks **Beta**. It is derived from the README maturity definitions, `TESTING.md` section 6, ADR-0010, ADR-0026, ADR-0028, ADR-0036, the `LIVE-VALIDATION DEFERRED` markers in `macros/` and `models/`, and the test inventory under `integration_tests/` and `.github/workflows/ci.yml`. It reflects the repository at commit `cbf22ec`. Every section before "Reconciliation results" is that initial assessment. Where it calls a marker stale, a path unconfirmed or a behavior untested, the later sections record what was then run and supersede it.
 
 The README defines beta as shipped but not yet fully vetted because of a larger surface area, more per-engine divergence, or narrower validation. The README defines **Validated** as built, deterministically tested where applicable, and executed on Snowflake, Databricks, BigQuery, and Redshift, with duckdb for the deterministic pieces. Each section below measures a capability against that bar.
 
@@ -161,5 +161,5 @@ New probes in both integration projects. Baselines after the change: Snowflake 1
 
 ## Caveats on this assessment
 
-- It reads documentation and test files. It did not execute any suite, so it cannot confirm which deferred markers are stale.
+- The initial assessment, the sections before "Reconciliation results", read documentation and test files and executed no suite, so it could not confirm which deferred markers were stale. The sections after it record the runs that did.
 - The `README` and `TESTING.md` disagree in places, and the doc above points to those places instead of choosing a side.

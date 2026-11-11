@@ -164,8 +164,9 @@ What a clean warehouse pass looks like: every model `OK`, every test `PASS`, and
 wrappers were validated on, and `vector_search` and the canary need 18.1 or above on a cluster) and is
 not available on Databricks SQL Classic, where the build fails with `AI_FUNCTION_UNSUPPORTED_ERROR`; BigQuery needs the
 AI API enabled), and (c) on BigQuery, a null `signal`/`evidence` in `assert_*_conforms` (run with
-`--target bigquery`) → the STRUCT field-access path has regressed. It was confirmed live on
-2026-09-25, so check the model output before assuming the macro is wrong.
+`--target bigquery`) → either the STRUCT field-access path has regressed, or the model left that
+field out of its answer. Read the raw `result` first (`to_json_string(result)`); the access path was
+confirmed live on 2026-09-25.
 
 ---
 
@@ -745,12 +746,12 @@ column names the problem (e.g. `wrong_top_hit`, `bad_accuracy`, `extract_null`).
 | `assert_grounded`, `grounded` generic | 0 rows | A returned row = a quote that is **not** a substring of its source after case/whitespace normalization → `contains`/`collapse_ws`/`norm_text` mis-rendered for this dialect (e.g. BigQuery raw-string regex, Snowflake's 4th-arg gotcha). |
 | `assert_conforms_catches` | 0 rows | `schema_enum` failed to resolve the taxonomy, or `IN (...)` list built wrong. |
 | `assert_search` (LIVE) | 0 rows | `wrong_count` ≠ 3 → `top_k`/`VECTOR_SEARCH` wiring off (watch **BigQuery's** divergent table-function path). `not_descending` → ordering/score sign wrong (BigQuery uses `1 - distance`). `score_out_of_range` → not cosine. `wrong_top_hit` → the near-identical utterance didn't rank #1 → **embedding quality / wrong embedding model**, or query embedded with a different model than the corpus. |
-| `assert_flatten_conforms` (LIVE) | 0 rows | A row = the flattened `signal` is null or off-taxonomy. Null → `field` path wrong for this engine's output shape (VARIANT `:` / STRUCT `.` / JSON `get_json_object`). Off-taxonomy value → the model ignored the schema (most likely on **BigQuery**, where the enum is prompt-constrained only, not schema-enforced). |
-| `assert_generate_text` (LIVE) | 0 rows | Empty/null text → `text` didn't extract the payload — watch **BigQuery's** `(...).result` struct access. |
+| `assert_flatten_conforms` (LIVE) | 0 rows | A row = the flattened `signal` is null or off-taxonomy. Null → `field` path wrong for this engine's output shape (VARIANT `:` / STRUCT `.` / JSON `get_json_object`), or the model omitted the field; read the raw `result` first. Off-taxonomy value → the model ignored the schema (most likely on **BigQuery**, where the enum is prompt-constrained only, not schema-enforced). |
+| `assert_generate_text` (LIVE) | 0 rows | Empty/null text → `text` didn't extract the payload, or the model returned nothing; watch **BigQuery's** `(...).result` struct access, and read the raw `result` first. |
 | `assert_wrappers_nonnull` (LIVE) | 0 rows | `<wrapper>_null` → that wrapper returned nothing on this account (bad endpoint/model var, content filter, unsupported warehouse tier). Cross-check the model var and the prerequisite (Databricks: DBR 15.4 LTS+, not on SQL Classic). **On Snowflake a null can also be transient**: see the note below this table. |
 | `assert_embeddings_nonempty` (LIVE) | 0 rows | `embed_empty` → `embed` returned a zero-length vector and the `embeddings` model still reported success. Seen on BigQuery's `AI.EMBED`, most likely from throttling, on a build that ran about three times slower than a clean one. Left unchecked, it surfaces in `search` as an opaque dimension-mismatch error that reads like a `vector_search` bug. `embed_null` → the same row `assert_wrappers_nonnull` reports. Like the Snowflake transient null below, this is a rebuild-and-retest case: rebuild `embeddings`, then test again. The same rows failing again means it is not transient. |
-| `assert_signals_conform` (LIVE) | 0 rows | A row = `classify`'s normalized scalar label is null or off-taxonomy. Null → the per-engine unwrap is wrong (Snowflake `:labels[0]` / BigQuery `.<field>`) — see §6. Off-taxonomy → the model ignored the label set. |
-| `assert_extract_conforms` (LIVE) | 0 rows | A row = the flattened extract `signal` is null or off-taxonomy. Null → the `field` path is wrong for this engine's extract shape (Snowflake's `:response` envelope is unwrapped in the wrapper; if BigQuery returns null, its STRUCT field access is wrong). |
+| `assert_signals_conform` (LIVE) | 0 rows | A row = `classify`'s normalized scalar label is null or off-taxonomy. Null → the per-engine unwrap is wrong (Snowflake `:labels[0]` / BigQuery `.<field>`) or the model omitted the field; read the raw `result` first, see §6. Off-taxonomy → the model ignored the label set. |
+| `assert_extract_conforms` (LIVE) | 0 rows | A row = the flattened extract `signal` is null or off-taxonomy. Null → the `field` path is wrong for this engine's extract shape (Snowflake's `:response` envelope is unwrapped in the wrapper; if BigQuery returns null, its STRUCT field access is wrong or the model omitted the field, so read the raw `result` first). |
 | `assert_extract_grounded` (LIVE, behavioral) | 0 rows | A row = the model returned an evidence quote that is **not** in the source utterance (a hallucinated quote). This surfaces real extraction quality — it can legitimately fail if the model paraphrases instead of quoting verbatim; investigate the row before assuming a code bug. |
 | `assert_kb` (LIVE) | 0 rows | `bad_row_count` (≠20) or `missing_source_type` → `knowledge_base`'s union/normalization didn't run as expected on this engine. `null_lineage_or_shape` → a common-shape column (source_id / account_key / embedding / text / source_type) came out null. |
 | `assert_run_log` (LIVE) | 0 rows | `no_classify_row` → `log_ai_run`'s post-hook INSERT never landed (hook error / ordering). `bad_values` → `row_count`≠10, `est_tokens` null/≤0, or `run_at` null → a cross-engine cast/typing problem in the log INSERT (the classic BigQuery pitfall). |
@@ -831,8 +832,10 @@ What remains uncovered or conditional (everything else is now covered on all thr
   fail from model nondeterminism rather than a code bug. Read a failing row before assuming a regression.
 - **BigQuery classify/extract STRUCT field access is confirmed live** (2026-09-25: the cloud suite
   ran 144 of 144 on BigQuery, including `assert_signals_conform` and `assert_extract_conforms`).
-  A **null** from either on `--target bigquery` still means the `.<field>` path is wrong, so
-  they remain the regression check.
+  A **null** from either on `--target bigquery` has two possible causes: the `.<field>` path is
+  wrong, or the model omitted the field (`AI.GENERATE` does not force required fields, and this
+  happened once with a vaguer typed-cast prompt). Inspect the raw `result` before changing the macro.
+  The two tests remain the regression check.
 - **Drift detection is bounded by how often someone runs the cloud pass.** `embedding_canary`
   finds provider drift by comparing runs spaced apart in time, and nothing runs it on a
   schedule: no CI job reaches a warehouse, the repository holds no Actions secrets, and adding

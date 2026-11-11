@@ -903,8 +903,9 @@ What remains uncovered or conditional (everything else is now covered on all thr
   declaration was imposing a transitive install and a `<2.0.0` constraint on every consumer for
   nothing. Removed from `packages.yml`.
 
-**Adversarial cloud coverage, added 2026-08-10,** on all three warehouses (`LIVE-VALIDATION
-DEFERRED` until the next cloud pass):
+**Adversarial cloud coverage, added 2026-08-10,** executed in the 2026-11-10 Snowflake,
+Databricks SQL warehouse and BigQuery baselines recorded in PR #32 (§3.3).
+`signals_adversarial` and `kb_hetero` also passed in the Redshift baseline:
 
 - `split_sentences` **cross-engine boundary parity** against a golden set
   (`assert_split_adversarial`, catching the Snowflake divergence #7).

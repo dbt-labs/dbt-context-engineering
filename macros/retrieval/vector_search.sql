@@ -18,8 +18,10 @@
                       for a knowledge base). Recommended for cost — searches only matching rows.
 
   Returns a SELECT of [id_column, select_columns..., score], ranked, top_k. score is cosine
-  similarity (higher = closer). LIVE-VALIDATION DEFERRED on cloud engines; the brute-force default
-  is validated on duckdb.
+  similarity (higher = closer). Executed live via search in the 2026-11-10 Snowflake,
+  Databricks SQL warehouse, BigQuery and Redshift baselines (TESTING.md §3.3; PR #32).
+  The brute-force default is also validated on duckdb. Databricks clusters need DBR 18.1+
+  for vector_cosine_similarity; search passed on DBR 18.2 (TESTING.md §6).
 -#}
 
 {% macro vector_search(relation, embedding_column, query_embedding, top_k=10, id_column=none, select_columns=none, filter=none) -%}
@@ -89,7 +91,8 @@ limit {{ top_k }}
         are SUPER arrays, so unnest each candidate vector AND the query vector to (index, value) rows
         (PartiQL `... AS e AT i`), join on index, and aggregate dot / ‖cand‖ / ‖query‖ per candidate.
         This is the brute-force default (ADR-0005), O(n · dim) with no index; the external-index path
-        is out of scope on Redshift (see create_vector_index). LIVE-VALIDATION DEFERRED.
+        is out of scope on Redshift (see create_vector_index). Executed live via search in the
+        2026-11-10 Redshift baseline (TESTING.md §3.3; PR #32).
 
         query_embedding MUST be a SUPER array so it can be unnested — an embed(...) call (returns the
         .embedding SUPER) or json_parse('[...]') for a literal. A synthetic _ce_rid keys the aggregation

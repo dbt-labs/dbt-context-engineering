@@ -1,7 +1,8 @@
 {#-
   embed — row-level embedding of a text column (spec §5.1). No prompt/schema; the embedding
   model is pinned via var embedding_model (a corpus embedded by one model cannot be searched
-  by another — see Phase 5). LIVE-VALIDATION DEFERRED.
+  by another — see Phase 5). Executed live on Snowflake, Databricks SQL warehouse, BigQuery
+  and Redshift in the 2026-11-10 baselines (TESTING.md §3.3; PR #32).
 
   Scalar on all three engines: Snowflake AI_EMBED, Databricks ai_query (serving endpoint), and
   BigQuery AI.EMBED (the newer AI.* GA family — endpoint + connection_id inline, no CREATE MODEL).

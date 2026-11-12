@@ -234,9 +234,10 @@ nightly/scheduled run, a large corpus, or "production." See
 - **`embed` on DuckDB has no implementation** — the local deterministic tier can exercise
   chunking, delta, and governance plumbing (with stand-in vectors) but not real
   embeddings. Real vectors need a live warehouse.
-- **`vector_search` is `LIVE-VALIDATION DEFERRED` on the Snowflake/Databricks/BigQuery
-  engines** — the brute-force default is validated on DuckDB (and live on **Redshift**);
-  confirm the per-engine cosine SQL against your warehouse the first time you run it live.
+- **`vector_search` executed live** via `search` in the 2026-11-10 Snowflake, Databricks
+  SQL warehouse, BigQuery and Redshift baselines (TESTING.md §3.3; PR #32). The brute-force
+  default is also validated on DuckDB. Databricks clusters need DBR 18.1+ for
+  `vector_cosine_similarity`; `search` passed on DBR 18.2 (TESTING.md §6).
 - **Redshift specifics:** `embed` returns a `SUPER` array and the model vars name a Bedrock
   **inference UDF** (provision it once via `create_bedrock_function` — see `dbt-ce-setup`);
   `vector_search`'s `query_embedding` must be a `SUPER` array; `create_vector_index` and the

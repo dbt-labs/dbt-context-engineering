@@ -116,8 +116,10 @@ string applied before ranking (e.g. restrict to a classification before searchin
 Returns `[id_column, select_columns..., score]`, ordered by score descending, tie-broken
 on `id_column`. Per-engine scoring differs internally (e.g. BigQuery ranks by
 `1 - distance`) but the returned `score` is a cosine similarity on every engine.
-`LIVE-VALIDATION DEFERRED` on the Snowflake/Databricks/BigQuery engines; the brute-force default
-is validated on DuckDB and live on **Redshift**. On **Redshift** there is no native vector type or
+Executed live via `search` in the 2026-11-10 Snowflake, Databricks SQL warehouse, BigQuery and
+Redshift baselines (TESTING.md §3.3; PR #32). The brute-force default is also validated on DuckDB.
+Databricks clusters need DBR 18.1+ for `vector_cosine_similarity`; `search` passed on DBR 18.2
+(TESTING.md §6). On **Redshift** there is no native vector type or
 scalar cosine, so the cosine is computed in pure SQL by unnesting the `SUPER` arrays (`... AS e AT i`)
 and aggregating — which means `query_embedding` **must be a `SUPER` array** (an `embed(...)` call,
 or `json_parse('[...]')` for a literal), not a bare bracket list.

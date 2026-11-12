@@ -14,9 +14,9 @@
   drift: pangram is the general-purpose baseline, short/long exercise length-dependent behavior,
   unicode exercises non-ASCII tokenization.
 
-  duckdb has no embed() implementation (default__embed raises; matches every other AI call in
-  this package, LIVE-VALIDATION DEFERRED per the README) and never will reach parity with the
-  three real engines -- it has no AI functions. The duckdb branch below sources a fixed stand-in
+  duckdb has no embed() implementation (default__embed raises). Real embed() calls executed
+  in the 2026-11-10 Snowflake, Databricks SQL warehouse, BigQuery and Redshift baselines
+  (TESTING.md §3.3; PR #32). The duckdb branch below sources a fixed stand-in
   literal instead, same precedent as content_hash_delta's stand-in (ADR-0020). A green duckdb
   canary verifies the hash/baseline/re-bless PLUMBING only -- it proves nothing about provider
   drift, because there is no real provider behind the stand-in.

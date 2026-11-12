@@ -3,7 +3,7 @@
     source B's is a TIMESTAMP. knowledge_base casts both to a common type so the UNION runs on strict
     engines (BigQuery rejects a UNION whose Nth columns differ in type); without that cast this build
     would fail. Both sources derive from the live embeddings model so the embedding column type is real.
-    LIVE-VALIDATION DEFERRED. -#}
+    kb_hetero and assert_kb_hetero passed in the 2026-11-10 baselines (TESTING.md §3.3; PR #32). -#}
 {% set ts = dbt.type_timestamp() %}
 {{ dbt_context_engineering.knowledge_base([
     {'relation': ref('embeddings'), 'source_type': 'date_src',
